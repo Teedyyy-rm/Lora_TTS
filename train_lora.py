@@ -35,8 +35,8 @@ class DataCollatorForOmniVoice:
 
     def __call__(self, features):
         # features is a list of dicts with 3D tensors
-        input_ids = [f["input_ids"] for f in features]  # list of [9, seq_len]
-        labels = [f["labels"] for f in features]        # list of [9, seq_len]
+        input_ids = [f["input_ids"] for f in features]  # list of [8, seq_len]
+        labels = [f["labels"] for f in features]        # list of [8, seq_len]
         audio_masks = [f["audio_mask"] for f in features]
         attn_masks = [f["attention_mask"] for f in features]
 
@@ -50,10 +50,10 @@ class DataCollatorForOmniVoice:
         for ids, labs, am, attn in zip(input_ids, labels, audio_masks, attn_masks):
             pad_len = max_len - ids.shape[1]
             batch_input_ids.append(
-                torch.cat([ids, torch.zeros((9, pad_len), dtype=torch.long)], dim=1)
+                torch.cat([ids, torch.zeros((8, pad_len), dtype=torch.long)], dim=1)
             )
             batch_labels.append(
-                torch.cat([labs, torch.full((9, pad_len), -100, dtype=torch.long)], dim=1)
+                torch.cat([labs, torch.full((8, pad_len), -100, dtype=torch.long)], dim=1)
             )
             batch_attention_mask.append(
                 torch.cat([attn, torch.zeros(pad_len, dtype=torch.bool)])
@@ -108,11 +108,13 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
         num_audio = audio_tokens.shape[1]
         seq_len = num_text + num_audio
 
-        # Build input_ids: [9, seq_len]
-        # Layer 0: text tokens, Layer 1-8: audio codebooks
-        input_ids = torch.zeros((9, seq_len), dtype=torch.long)
+        # Build input_ids: [8, seq_len]
+        # Layer 0: text tokens + audio codebook 0
+        # Layers 1-7: audio codebooks 1-7
+        # codebook_layer_offsets: [0, 1025, 2050, 3075, 4100, 5125, 6150, 7175]
+        input_ids = torch.zeros((8, seq_len), dtype=torch.long)
         input_ids[0, :num_text] = torch.tensor(text_tokens, dtype=torch.long)
-        input_ids[1:9, num_text:] = audio_tokens  # [8, time] → [8, num_audio]
+        input_ids[:, num_text:] = audio_tokens  # [8, time]
 
         # audio_mask: 0=text, 1=audio
         audio_mask = torch.zeros(seq_len, dtype=torch.bool)
@@ -120,8 +122,7 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
 
         # labels: -100 for text positions, audio tokens for audio positions
         labels = input_ids.clone()
-        labels[0, :num_text] = -100  # text tokens: ignore in loss
-        labels[1:9, :num_text] = -100  # no audio during text
+        labels[:, :num_text] = -100  # ignore text positions (all layers)
 
         processed.append({
             "input_ids": input_ids,
