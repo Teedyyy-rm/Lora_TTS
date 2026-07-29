@@ -139,8 +139,8 @@ def main():
 
     # ── Apply LoRA to m.llm (Qwen3Model, base transformer) ──
     lora_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
+        r=64,
+        lora_alpha=128,
         target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj",
@@ -151,7 +151,7 @@ def main():
     )
     m.llm = get_peft_model(m.llm, lora_config)
     m.llm.print_trainable_parameters()
-    # Trainable: ~5M params
+    # Trainable: ~40M / 605M ≈ 6.6%
 
     # ── Load & preprocess dataset ──
     logger.info("Loading dataset...")
@@ -181,7 +181,7 @@ def main():
     # 7540 / (4*4) = 471 steps/epoch × 6 epochs = 2826 steps
     training_args = TrainingArguments(
         output_dir=output_dir,
-        num_train_epochs=6,
+        num_train_epochs=10,
         per_device_train_batch_size=4,
         gradient_accumulation_steps=4,
         learning_rate=2e-5,
