@@ -75,6 +75,7 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
 
     Dataset features: audio (array), transcription (str), file_name (str)
     """
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     processed = []
     from tqdm import tqdm
 
@@ -96,7 +97,7 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
 
         # Encode audio → tokens: [1, 8, time] — encode on CPU, avoid VRAM leak
         with torch.no_grad():
-            audio_input = audio_t.unsqueeze(0).unsqueeze(0)  # keep on CPU
+            audio_input = audio_t.unsqueeze(0).unsqueeze(0).to(device)
             enc = audio_tokenizer.encode(audio_input)
             audio_tokens = enc.audio_codes[0]  # [8, time]
 
@@ -178,12 +179,9 @@ def main():
     train_data = dataset[split]
     logger.info(f"Raw dataset: {len(train_data)} samples")
 
-    # Precompute audio tokens (keep tokenizer on CPU, encode is fast enough)
-    audio_tokenizer = m.audio_tokenizer.to("cpu")  # CPU to avoid VRAM leak
-
-    # Ensure audio_tokenizer decoder is also on CPU
-    if hasattr(audio_tokenizer, "decoder") and audio_tokenizer.decoder is not None:
-        audio_tokenizer.decoder = audio_tokenizer.decoder.to("cpu")
+    # Precompute audio tokens (GPU encode for speed, clear cache between loops)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    audio_tokenizer = m.audio_tokenizer.to(device)
     torch.cuda.empty_cache()
     text_tokenizer = m.text_tokenizer if hasattr(m, "text_tokenizer") else None
 
