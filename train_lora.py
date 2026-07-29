@@ -74,14 +74,12 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer, device="cpu"):
     Dataset features: audio (array), transcription (str), file_name (str)
     """
     processed = []
+    from tqdm import tqdm
 
-    for i, sample in enumerate(dataset):
+    for i, sample in enumerate(tqdm(dataset, desc="Encoding audio→tokens", unit="samples")):
         audio_array = sample["audio"]["array"] if isinstance(sample["audio"], dict) else sample["audio"]
         sr = sample["audio"]["sampling_rate"] if isinstance(sample["audio"], dict) else 24000
         text = sample["transcription"]
-
-        if i % 500 == 0:
-            logger.info(f"Processing {i}/{len(dataset)}")
 
         # Convert audio to tensor
         audio_t = torch.from_numpy(audio_array).float()
