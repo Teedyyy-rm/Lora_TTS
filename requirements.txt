@@ -1,0 +1,11 @@
+# V100 Docker requirements (bổ sung cho requirements.txt của Omnivoice)
+torch>=2.6.0
+torchaudio>=2.6.0
+transformers>=5.14.1
+peft>=0.14.0
+accelerate>=1.5.0
+datasets>=3.0.0
+soundfile>=0.12.1
+huggingface_hub>=0.27.0
+safetensors>=0.4.5
+omnivoice>=0.1.0

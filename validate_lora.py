@@ -1,0 +1,95 @@
+"""
+Local Validation: Load LoRA adapter + OmniVoice-Vietnamese
+---------------------------------------------------------
+Usage: python validate_lora.py --lora_path <path_to_lora>
+
+Tests the finetuned LoRA by generating TTS with voice clone prompt.
+"""
+
+import os
+import sys
+import torch
+import pickle
+import soundfile as sf
+import argparse
+
+sys.path.insert(0, "/home/obito/projects/StoryCast")
+
+import omnivoice
+from omnivoice.models.omnivoice import OmniVoiceGenerationConfig
+from peft import PeftModel
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--lora_path", type=str, required=True,
+                        help="Path to LoRA adapter (e.g., ./final_lora or HF repo)")
+    parser.add_argument("--base_model", type=str,
+                        default="/home/obito/projects/Models/OmniVoice-Vietnamese",
+                        help="Base OmniVoice-Vietnamese model path")
+    parser.add_argument("--voice_prompt", type=str,
+                        default="/home/obito/projects/StoryCast/assets/voices/Ngoc_Huyen/vp1.pkl",
+                        help="Voice clone prompt (.pkl)")
+    parser.add_argument("--text", type=str,
+                        default="Xin chào, tôi là Ngọc Huyền. Rất vui được gặp bạn!",
+                        help="Text to generate")
+    parser.add_argument("--output", type=str, default="output/validation.wav",
+                        help="Output WAV path")
+    args = parser.parse_args()
+
+    # ── Load base OmniVoice model ──
+    print(f"Loading base model from: {args.base_model}")
+    m = omnivoice.OmniVoice.from_pretrained(
+        args.base_model,
+        torch_dtype=torch.float16,
+        local_files_only=True,
+    )
+
+    # ── Apply LoRA to m.llm (Qwen3Model) ──
+    if os.path.exists(args.lora_path) or "/" in args.lora_path:
+        print(f"Loading LoRA from: {args.lora_path}")
+        
+        # Add prepare_inputs_for_generation if missing (Qwen3Model doesn't have it)
+        if not hasattr(m.llm, "prepare_inputs_for_generation"):
+            m.llm.prepare_inputs_for_generation = lambda **kwargs: kwargs
+            
+        m.llm = PeftModel.from_pretrained(m.llm, args.lora_path)
+        print(f"✅ LoRA loaded: {args.lora_path}")
+    else:
+        print("⚠️ No LoRA path provided, using base model only")
+
+    # Move to GPU
+    m = m.to("cuda")
+    if hasattr(m, "audio_tokenizer"):
+        m.audio_tokenizer = m.audio_tokenizer.to("cpu")
+    torch.cuda.empty_cache()
+
+    # ── Load voice prompt ──
+    with open(args.voice_prompt, "rb") as f:
+        vp = pickle.load(f)
+    print(f"✅ Voice prompt: {os.path.basename(args.voice_prompt)} ({vp.ref_audio_tokens.shape[1]} frames)")
+
+    # ── Generate ──
+    gc = OmniVoiceGenerationConfig(
+        num_step=48, guidance_scale=2.0,
+        denoise=True, preprocess_prompt=True, postprocess_output=True,
+    )
+
+    print(f'Generating: "{args.text}"')
+    with torch.inference_mode():
+        audio = m.generate(
+            text=args.text,
+            language="vi",
+            speed=1.0,
+            generation_config=gc,
+            voice_clone_prompt=vp,
+        )
+    if isinstance(audio, list):
+        audio = audio[0]
+
+    sf.write(args.output, audio, 24000, format="WAV")
+    print(f"✅ Saved: {args.output} ({len(audio) / 24000:.1f}s)")
+
+
+if __name__ == "__main__":
+    main()
