@@ -70,8 +70,8 @@ class DataCollatorForOmniVoice:
         }
 
 
-def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer, device="cpu"):
-    """Convert raw audio + text to OmniVoice input format.
+def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
+    """Convert raw audio + text to OmniVoice input format (on CPU).
 
     Dataset features: audio (array), transcription (str), file_name (str)
     """
@@ -94,9 +94,9 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer, device="cpu"):
         if rms > 0:
             audio_t = audio_t * (0.13 / rms)
 
-        # Encode audio → tokens: [1, 8, time]
+        # Encode audio → tokens: [1, 8, time] — encode on CPU, avoid VRAM leak
         with torch.no_grad():
-            audio_input = audio_t.unsqueeze(0).unsqueeze(0).to(device)
+            audio_input = audio_t.unsqueeze(0).unsqueeze(0)  # keep on CPU
             enc = audio_tokenizer.encode(audio_input)
             audio_tokens = enc.audio_codes[0]  # [8, time]
 
@@ -178,9 +178,13 @@ def main():
     train_data = dataset[split]
     logger.info(f"Raw dataset: {len(train_data)} samples")
 
-    # Precompute audio tokens
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    audio_tokenizer = m.audio_tokenizer.to(device)
+    # Precompute audio tokens (keep tokenizer on CPU, encode is fast enough)
+    audio_tokenizer = m.audio_tokenizer.to("cpu")  # CPU to avoid VRAM leak
+
+    # Ensure audio_tokenizer decoder is also on CPU
+    if hasattr(audio_tokenizer, "decoder") and audio_tokenizer.decoder is not None:
+        audio_tokenizer.decoder = audio_tokenizer.decoder.to("cpu")
+    torch.cuda.empty_cache()
     text_tokenizer = m.text_tokenizer if hasattr(m, "text_tokenizer") else None
 
     if text_tokenizer is None:
@@ -191,7 +195,7 @@ def main():
             text_tokenizer.pad_token = text_tokenizer.eos_token
 
     logger.info("Preprocessing dataset (encoding audio → tokens)...")
-    processed = preprocess_dataset(train_data, audio_tokenizer, text_tokenizer, device)
+    processed = preprocess_dataset(train_data, audio_tokenizer, text_tokenizer)
     audio_tokenizer.to("cpu")
     logger.info(f"Processed: {len(processed)} samples")
 
@@ -249,13 +253,13 @@ def main():
         json.dump({
             "base_model": base_model_path,
             "dataset": "pnnbao-ump/ngochuyen_voice",
-            "lora_rank": 16,
-            "lora_alpha": 32,
+            "lora_rank": lora_config.r,
+            "lora_alpha": lora_config.lora_alpha,
             "target_modules": lora_config.target_modules,
             "task_type": "FEATURE_EXTRACTION",
-            "epochs": 6,
-            "batch_size": 16,
-            "learning_rate": "2e-5",
+            "epochs": training_args.num_train_epochs,
+            "batch_size": training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps,
+            "learning_rate": training_args.learning_rate,
         }, f, indent=2)
 
 
