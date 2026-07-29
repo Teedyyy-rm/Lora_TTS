@@ -19,6 +19,7 @@ from transformers import (
 )
 from peft import get_peft_model, LoraConfig, TaskType
 import logging
+from callbacks import DetailedLogCallback
 import soundfile as sf
 from dataclasses import dataclass
 
@@ -204,7 +205,7 @@ def main():
         learning_rate=2e-5,
         lr_scheduler_type="cosine",
         warmup_steps=200,
-        logging_steps=50,
+        logging_steps=10,
         save_strategy="steps",
         save_steps=471,
         save_total_limit=4,
@@ -216,8 +217,9 @@ def main():
         hub_model_id="Teedyyy-rm/omnivoice-ngochuyen-lora",
         hub_strategy="checkpoint",
         hub_token=os.environ.get("HF_TOKEN"),
-        report_to="none",
+        report_to="tensorboard",
         logging_dir=os.path.join(output_dir, "logs"),
+        logging_first_step=True,
         gradient_checkpointing=False,
         optim="adamw_torch",
     )
@@ -228,6 +230,7 @@ def main():
         args=training_args,
         train_dataset=processed,
         data_collator=DataCollatorForOmniVoice(),
+        callbacks=[DetailedLogCallback()],
     )
 
     # ── Train ──
