@@ -45,23 +45,25 @@ def main():
         local_files_only=True,
     )
 
+    # CHUYỂN LÊN CUDA TRƯỚC: Đảm bảo PEFT khi nạp vào sẽ map đúng địa chỉ GPU
+    m = m.to("cuda")
+    if hasattr(m, "audio_tokenizer"):
+        m.audio_tokenizer = m.audio_tokenizer.to("cpu")  # Tiết kiệm VRAM nền
+
     # ── Apply LoRA to m.llm (Qwen3Model) ──
     if os.path.exists(args.lora_path) or "/" in args.lora_path:
         print(f"Loading LoRA from: {args.lora_path}")
-        
-        # Add prepare_inputs_for_generation if missing (Qwen3Model doesn't have it)
+
+        # Vá lỗi thiếu hàm sinh từ của lớp backbone gốc
         if not hasattr(m.llm, "prepare_inputs_for_generation"):
             m.llm.prepare_inputs_for_generation = lambda **kwargs: kwargs
-            
+
+        # Nạp trực tiếp vào m.llm đã ở trên CUDA
         m.llm = PeftModel.from_pretrained(m.llm, args.lora_path)
         print(f"✅ LoRA loaded: {args.lora_path}")
     else:
         print("⚠️ No LoRA path provided, using base model only")
 
-    # Move to GPU
-    m = m.to("cuda")
-    if hasattr(m, "audio_tokenizer"):
-        m.audio_tokenizer = m.audio_tokenizer.to("cpu")
     torch.cuda.empty_cache()
 
     # ── Load voice prompt ──
@@ -86,6 +88,11 @@ def main():
         )
     if isinstance(audio, list):
         audio = audio[0]
+
+    # SỬA LỖI THƯ MỤC: Tự động check và tạo folder output nếu chưa có
+    output_dir = os.path.dirname(args.output)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
 
     sf.write(args.output, audio, 24000, format="WAV")
     print(f"✅ Saved: {args.output} ({len(audio) / 24000:.1f}s)")
