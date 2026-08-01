@@ -218,9 +218,9 @@ def main():
     # ── Load dataset ──
     logger.info("Loading dataset...")
     from datasets import load_dataset
-    # Dataset trên HF là parquet (audio bytes nhúng) — dùng load_dataset,
-    # KHÔNG dùng load_from_disk (chỉ đọc được DatasetDict lưu disk cũ)
-    if os.path.isdir(dataset_path) and os.path.exists(os.path.join(dataset_path, "dataset_info.json")):
+    # Dataset local (HF parquet format: data/ + dataset_info.json) → load_dataset.
+    # load_from_disk CHỈ dùng khi có dataset_dict.json (DatasetDict lưu disk cũ)
+    if os.path.isdir(dataset_path) and os.path.exists(os.path.join(dataset_path, "dataset_dict.json")):
         dataset = load_from_disk(dataset_path)
     else:
         dataset = load_dataset(dataset_path, token=os.environ.get("HF_TOKEN"))
