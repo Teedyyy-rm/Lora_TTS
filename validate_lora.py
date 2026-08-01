@@ -63,7 +63,7 @@ def main():
             whitelist = {
                 "peft_type", "r", "lora_alpha", "lora_dropout", "bias",
                 "task_type", "target_modules", "base_model_name_or_path",
-                "fan_in_fan_out", "init_lora_weights",
+                "fan_in_fan_out", "init_lora_weights", "use_rslora",
             }
             clean_cfg = {k: raw_cfg[k] for k in whitelist if k in raw_cfg}
             if len(clean_cfg) != len(raw_cfg):

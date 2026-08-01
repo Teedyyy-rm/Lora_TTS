@@ -31,11 +31,16 @@ from dataclasses import dataclass
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ── Hyperparameters V2 (tối ưu cho dataset mới 14000+ mẫu) ──
-NUM_EPOCHS = 4          # 10 → 4: data lớn, 10 epochs = overfit chắc chắn
+# ── Hyperparameters V3 (tối ưu CHẤT LƯỢNG — Aug 2, V100 mới 16GB) ──
+# Ưu tiên chất lượng giọng, không cần nhanh:
+#   - 3 epochs (KHÔNG 4 — đã chứng minh epoch 4 overfit: eval_loss thấp nhưng nhiễu 25%)
+#   - batch 16 × 2 accum = effective 32 (giữ nhịp học như bản chạy tốt, gradient mượt hơn;
+#     8→16 tận dụng VRAM dư; bắt buộc gradient_checkpointing=True)
+#   - dropout 0.0 (Unsloth: LoRA dropout không hữu ích cho TTS, 0 = consistency)
+NUM_EPOCHS = 3          # 4 → 3: chống overfit (checkpoint-1329 epoch 3 = giọng chuẩn)
 VAL_RATIO = 0.05        # 5% validation set (phát hiện overfit, giữ best)
-BATCH_SIZE = 8          # 4 → 8: V100 dư VRAM, gradient ổn định
-GRAD_ACCUM = 4          # effective batch = 32 (như bản V100 cũ đã chạy tốt)
+BATCH_SIZE = 16         # 8 → 16: tận dụng VRAM dư 6GB, gradient ổn định
+GRAD_ACCUM = 2          # 4 → 2: giữ effective 32 (16×2)
 
 
 @dataclass
@@ -197,7 +202,7 @@ class PushAdapterOnSave(TrainerCallback):
             whitelist = {
                 "peft_type", "r", "lora_alpha", "lora_dropout", "bias",
                 "task_type", "target_modules", "base_model_name_or_path",
-                "fan_in_fan_out", "init_lora_weights",
+                "fan_in_fan_out", "init_lora_weights", "use_rslora",
             }
             clean_cfg = {k: raw_cfg[k] for k in whitelist if k in raw_cfg}
             with open(cfg_path, "w") as fp:
@@ -288,7 +293,7 @@ def main():
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj",
         ],
-        lora_dropout=0.05,
+        lora_dropout=0.0,   # 0.05 → 0.0 (Unsloth: dropout không hữu ích cho TTS)
         bias="none",
         # FEATURE_EXTRACTION — m.llm là Qwen3Model thuần (không có lm_head),
         # CAUSAL_LM cần Qwen3ForCausalLM → crash. Fix nhiễu = KHÔNG freeze audio_*
@@ -363,8 +368,8 @@ def main():
         warmup_steps=100,
         logging_steps=10,
         save_strategy="steps",
-        save_steps=steps_per_epoch,          # save 1 lần/epoch
-        save_total_limit=4,
+        save_steps=max(1, steps_per_epoch // 2),  # save 2 lần/epoch → test được nhiều điểm
+        save_total_limit=6,
         eval_strategy="steps",
         eval_steps=steps_per_epoch,          # eval 1 lần/epoch
         load_best_model_at_end=True,
@@ -380,7 +385,7 @@ def main():
         report_to="tensorboard",
         logging_dir=os.path.join(output_dir, "logs"),
         logging_first_step=True,
-        gradient_checkpointing=False,
+        gradient_checkpointing=True,   # BẮT BUỘC với batch 16 (không bật = OOM ~22GB)
         optim="adamw_torch",
     )
 
