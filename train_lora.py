@@ -189,14 +189,17 @@ def main():
     )
     logger.info(f"Loaded: OmniVoice (LLM={type(m.llm).__name__})")
 
-    # ── Freeze model: CHỈ freeze những gì KHÔNG cần train ──
-    # QUAN TRỌNG: KHÔNG freeze audio_embeddings + audio_heads!
-    # LoRA thay đổi m.llm → hidden_states mới → audio_heads phải train theo
-    # (bản cũ qlora_train_v100.py train cả audio_* → giọng chuẩn;
-    #  bản freeze audio_* → nhiễu vì heads không khớp với llm mới)
+    # ── Freeze model: CHỈ train llm (LoRA) + audio_heads + audio_embeddings ──
+    # QUAN TRỌNG (học từ bản cũ qlora_train_v100.py chạy tốt):
+    #   ✅ train: LoRA trên m.llm + audio_heads + audio_embeddings (audio_specific.pt 65MB)
+    #   ❌ KHÔNG train audio_tokenizer.* (quantizer codebook, acoustic encoder/decoder)
+    #      — tokenizer là thành phần cố định, train nó → hỏng → audio NaN
     for name, param in m.named_parameters():
-        if "llm" not in name and "audio_" not in name:
-            param.requires_grad = False
+        if "audio_tokenizer" in name:
+            param.requires_grad = False          # tokenizer GIỮ NGUYÊN
+        elif "llm" not in name and "audio_" not in name:
+            param.requires_grad = False          # phần khác freeze
+        # còn lại (llm.* + audio_heads.* + audio_embeddings.*) → train
 
     # ── Apply LoRA to m.llm (Qwen3Model, base transformer) ──
     # V2 tối ưu: rank 128 (như bản V100 cũ chạy tốt — học chi tiết giọng,
@@ -324,16 +327,16 @@ def main():
     m.llm.save_pretrained(final_path)
     logger.info(f"Final LoRA saved to: {final_path}")
 
-    # ── Save audio_specific.pt (audio_embeddings + audio_heads) ──
-    # QUAN TRỌNG: bản cũ qlora_train_v100.py lưu file này — StoryCast load
-    # cả LoRA + audio_specific khi inference. Thiếu → heads cũ không khớp
-    # với llm mới → audio nhiễu.
+    # ── Save audio_specific.pt (CHỈ audio_heads + audio_embeddings) ──
+    # QUAN TRỌNG: giống bản cũ — chỉ ~65MB (heads + embeddings).
+    # KHÔNG lưu audio_tokenizer.* (giữ nguyên từ base, không train).
     torch.save(
         {n: p.detach().cpu() for n, p in m.named_parameters()
-         if "audio_" in n and "llm" not in n},
+         if ("audio_" in n and "llm" not in n
+             and "audio_tokenizer" not in n)},
         os.path.join(final_path, "audio_specific.pt"),
     )
-    logger.info(f"audio_specific.pt saved (audio_embeddings + audio_heads)")
+    logger.info(f"audio_specific.pt saved (chỉ audio_heads + audio_embeddings)")
 
     # ── Also save config ──
     import json
