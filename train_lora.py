@@ -1,10 +1,14 @@
 """
-Fine-Tune LoRA OmniVoice-Vietnamese (Ngoc Huyen Voice)
-------------------------------------------------------
+Fine-Tune LoRA OmniVoice-Vietnamese (Ngoc Huyen Voice) — V2
+--------------------------------------------------------------
 Base model: splendor1811/omnivoice-vietnamese
-Dataset:   pnnbao-ump/ngochuyen_voice
+Dataset:   Teedyyy-rm/Voice_Ngoc_Huyen  (dataset MỚI: nhiều giờ audio,
+           có tên riêng truyện, pre-process sạch — thay pnnbao-ump/ngochuyen_voice cũ)
 Architecture: OmniVoice → LoRA on m.llm (Qwen3Model)
 Task:      Audio language modeling (text → audio tokens)
+
+V2: output_dir + hub_model_id đổi tên (KHÔNG đè bản đang chạy trong omnivoice).
+    Dataset tự clone từ HF nếu chưa có.
 """
 
 import os
@@ -80,8 +84,18 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
     from tqdm import tqdm
 
     for i, sample in enumerate(tqdm(dataset, desc="Encoding audio→tokens", unit="samples")):
-        audio_array = sample["audio"]["array"] if isinstance(sample["audio"], dict) else sample["audio"]
-        sr = sample["audio"]["sampling_rate"] if isinstance(sample["audio"], dict) else 24000
+        audio_field = sample["audio"]
+        # HF Audio feature trả về AudioDecoder (hỗ trợ ["array"]/["sampling_rate"]),
+        # dict, hoặc array thuần — xử lý cả 3
+        if hasattr(audio_field, "array"):
+            audio_array = audio_field["array"]
+            sr = audio_field["sampling_rate"]
+        elif isinstance(audio_field, dict):
+            audio_array = audio_field.get("array")
+            sr = audio_field.get("sampling_rate", 24000)
+        else:
+            audio_array = audio_field
+            sr = 24000
         text = sample["transcription"]
 
         # Convert audio to tensor
@@ -139,8 +153,22 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
 def main():
     # ── Paths (điều chỉnh cho V100 Docker) ──
     base_model_path = "./base_model/omnivoice-vietnamese"
-    dataset_path = "./dataset/ngochuyen_voice"
-    output_dir = "./omnivoice_ngochuyen_lora"
+    dataset_path = "./dataset/ngochuyen_voice"     # sau khi clone dataset mới
+    output_dir = "./omnivoice_ngochuyen_lora_v2"   # V2 — KHÔNG đè bản cũ
+
+    # ── Clone dataset MỚI từ HuggingFace (nếu chưa có) ──
+    # Dataset mới: Teedyyy-rm/Voice_Ngoc_Huyen (nhiều giờ audio, có tên riêng truyện,
+    # pre-process sạch: trim silence, ép thở, volume chuẩn, relative path)
+    if not os.path.isdir(dataset_path):
+        logger.info("Cloning dataset từ HuggingFace: Teedyyy-rm/Voice_Ngoc_Huyen ...")
+        from huggingface_hub import snapshot_download
+        snapshot_download(
+            repo_id="Teedyyy-rm/Voice_Ngoc_Huyen",
+            repo_type="dataset",
+            local_dir=dataset_path,
+            token=os.environ.get("HF_TOKEN"),
+        )
+        logger.info(f"✅ Dataset cloned → {dataset_path}")
 
     # ── Load OmniVoice model ──
     logger.info("Loading OmniVoice model...")
@@ -173,9 +201,15 @@ def main():
     m.llm.print_trainable_parameters()
     # Trainable: ~40M / 605M ≈ 6.6%
 
-    # ── Load & preprocess dataset ──
+    # ── Load dataset ──
     logger.info("Loading dataset...")
-    dataset = load_from_disk(dataset_path)
+    from datasets import load_dataset
+    # Dataset trên HF là parquet (audio bytes nhúng) — dùng load_dataset,
+    # KHÔNG dùng load_from_disk (chỉ đọc được DatasetDict lưu disk cũ)
+    if os.path.isdir(dataset_path) and os.path.exists(os.path.join(dataset_path, "dataset_info.json")):
+        dataset = load_from_disk(dataset_path)
+    else:
+        dataset = load_dataset(dataset_path, token=os.environ.get("HF_TOKEN"))
     split = "train" if "train" in dataset else list(dataset.keys())[0]
     train_data = dataset[split]
     logger.info(f"Raw dataset: {len(train_data)} samples")
@@ -217,7 +251,7 @@ def main():
         dataloader_num_workers=4,
         remove_unused_columns=False,
         push_to_hub=True,
-        hub_model_id="Teedyyy-rm/omnivoice-ngochuyen-lora",
+        hub_model_id="Teedyyy-rm/omnivoice-ngochuyen-lora-v2",
         hub_strategy="checkpoint",
         hub_token=os.environ.get("HF_TOKEN"),
         report_to="tensorboard",
@@ -251,7 +285,7 @@ def main():
     with open(os.path.join(final_path, "training_config.json"), "w") as f:
         json.dump({
             "base_model": base_model_path,
-            "dataset": "pnnbao-ump/ngochuyen_voice",
+            "dataset": "Teedyyy-rm/Voice_Ngoc_Huyen",
             "lora_rank": lora_config.r,
             "lora_alpha": lora_config.lora_alpha,
             "target_modules": lora_config.target_modules,
