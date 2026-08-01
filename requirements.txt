@@ -1,11 +1,24 @@
-# V100 Docker requirements (bổ sung cho requirements.txt của Omnivoice)
-torch>=2.6.0
-torchaudio>=2.6.0
+# V100 finetune requirements — PINNED versions (đã test OK trên Tesla V100)
+# ⚠️ QUAN TRỌNG — Các phiên bản này là BẮT BUỘC, không dùng bản mới hơn:
+
+# 1. torch: V100 (sm_70) KHÔNG chạy được torch >= 2.7 (no kernel image).
+#    Bắt buộc 2.6.x + cu126 — index pytorch whl/cu126
+torch==2.6.0
+torchaudio==2.6.0
+
+# 2. transformers 5.x OK (đã test với torch 2.6)
 transformers>=5.14.1
 peft>=0.14.0
 accelerate>=1.5.0
-datasets>=3.0.0
+
+# 3. datasets: BẮT BUỘC 3.x — từ 4.x trở lên ép dùng torchcodec để decode
+#    audio (gây lỗi libnppicc.so.12 trên container minimized).
+#    3.x dùng soundfile — chạy ngay không cần lib ngoài.
+datasets==3.5.0
 soundfile>=0.12.1
+librosa>=0.10.0
+
+# 4. KHÔNG cài torchcodec — datasets 3.5 không cần nó.
 huggingface_hub>=0.27.0
 safetensors>=0.4.5
 omnivoice>=0.1.0

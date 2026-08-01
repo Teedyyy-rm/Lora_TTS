@@ -70,6 +70,17 @@ python3 train_lora.py
 python3 validate_lora.py --lora-path ./omnivoice_ngochuyen_lora_v2/final_lora --text "Câu test..."
 ```
 
+## 🐛 Troubleshooting — CÁC LỖI ĐÃ GẶP & FIX (đừng debug lại!)
+
+| Lỗi | Nguyên nhân | Fix |
+|---|---|---|
+| `CUDA error: no kernel image is available` | torch ≥2.7 không hỗ trợ V100 (sm_70) | `pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu126` |
+| `ImportError: To support decoding audio data, please install 'torchcodec'` | datasets ≥4.x ép dùng torchcodec | `pip install datasets==3.5.0` (dùng soundfile — không cần torchcodec) |
+| `libnppicc.so.12: cannot open shared object file` | torchcodec cần NVIDIA NPP (container minimized thiếu) | Không cài torchcodec — dùng datasets 3.5.0 |
+| `FileNotFoundError: ... neither a Dataset directory nor DatasetDict` | Logic load dataset sai (local dir có dataset_info.json là HF parquet format) | `load_dataset(local_dir)` — chỉ `load_from_disk` khi có `dataset_dict.json` |
+| `Error opening terminal: xterm-kitty` | V100 minimized không có terminfo Kitty | `export TERM=xterm-256color` (đã thêm vào ~/.bashrc) |
+| `Error opening terminal: unknown` khi dùng `watch` qua SSH | watch cần tty | `ssh -t -p 40202 ... "watch ..."` hoặc dùng `nvidia-smi -l 1` |
+
 ## 🆚 V2 vs bản cũ
 
 | | Bản cũ (`omnivoice-ngochuyen-lora`) | **V2 (repo này)** |
