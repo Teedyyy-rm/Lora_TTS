@@ -30,6 +30,12 @@ from dataclasses import dataclass
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ── Hyperparameters V2 (tối ưu cho dataset mới 14000+ mẫu) ──
+NUM_EPOCHS = 4          # 10 → 4: data lớn, 10 epochs = overfit chắc chắn
+VAL_RATIO = 0.05        # 5% validation set (phát hiện overfit, giữ best)
+BATCH_SIZE = 8          # 4 → 8: V100 dư VRAM, gradient ổn định
+GRAD_ACCUM = 4          # effective batch = 32 (như bản V100 cũ đã chạy tốt)
+
 
 @dataclass
 class DataCollatorForOmniVoice:
@@ -186,9 +192,11 @@ def main():
             param.requires_grad = False
 
     # ── Apply LoRA to m.llm (Qwen3Model, base transformer) ──
+    # V2 tối ưu: rank 128 (như bản V100 cũ chạy tốt — học chi tiết giọng,
+    # giảm "giọng khô") + alpha = 2×rank
     lora_config = LoraConfig(
-        r=64,
-        lora_alpha=128,
+        r=128,
+        lora_alpha=256,
         target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj",
@@ -232,20 +240,46 @@ def main():
     audio_tokenizer.to("cpu")
     logger.info(f"Processed: {len(processed)} samples")
 
+    # ── Tách Validation set (5%) — mô hình KHÔNG học phần này ──
+    # Mục đích: đo eval_loss sau mỗi N steps → phát hiện overfit (học vẹt)
+    # sớm, load_best_model_at_end giữ checkpoint tốt nhất
+    import random
+    random.seed(42)
+    indices = list(range(len(processed)))
+    random.shuffle(indices)
+    n_val = max(1, int(len(processed) * VAL_RATIO))
+    val_indices = set(indices[:n_val])
+    train_processed = [p for i, p in enumerate(processed) if i not in val_indices]
+    val_processed = [p for i, p in enumerate(processed) if i in val_indices]
+    logger.info(f"Split: {len(train_processed)} train + {len(val_processed)} val "
+                f"({VAL_RATIO:.0%} validation)")
+
     # ── Training arguments ──
-    # 7540 / (4*4) = 471 steps/epoch × 6 epochs = 2826 steps
+    # V2 tối ưu cho dataset MỚI (14000+ mẫu):
+    #   - 4 epochs (10 quá nhiều → overfit)
+    #   - batch 8 × 4 accum = effective 32 (V100 dư VRAM, gradient ổn định)
+    #   - save_steps = steps/epoch (tính động theo dataset thật)
+    steps_per_epoch = max(1, len(train_processed) // (BATCH_SIZE * GRAD_ACCUM))
+    total_steps = steps_per_epoch * NUM_EPOCHS
+    logger.info(f"Steps/epoch: {steps_per_epoch}, total: {total_steps} "
+                f"({NUM_EPOCHS} epochs)")
+
     training_args = TrainingArguments(
         output_dir=output_dir,
-        num_train_epochs=10,
-        per_device_train_batch_size=4,
-        gradient_accumulation_steps=4,
+        num_train_epochs=NUM_EPOCHS,
+        per_device_train_batch_size=BATCH_SIZE,
+        gradient_accumulation_steps=GRAD_ACCUM,
         learning_rate=2e-5,
         lr_scheduler_type="cosine",
-        warmup_steps=200,
+        warmup_steps=100,
         logging_steps=10,
         save_strategy="steps",
-        save_steps=471,
+        save_steps=steps_per_epoch,          # save 1 lần/epoch
         save_total_limit=4,
+        eval_strategy="steps",
+        eval_steps=steps_per_epoch,          # eval 1 lần/epoch
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
         fp16=True,
         bf16=False,
         dataloader_num_workers=4,
@@ -265,7 +299,8 @@ def main():
     trainer = Trainer(
         model=m,
         args=training_args,
-        train_dataset=processed,
+        train_dataset=train_processed,
+        eval_dataset=val_processed,
         data_collator=DataCollatorForOmniVoice(),
         callbacks=[DetailedLogCallback()],
     )
@@ -293,6 +328,9 @@ def main():
             "epochs": training_args.num_train_epochs,
             "batch_size": training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps,
             "learning_rate": training_args.learning_rate,
+            "val_ratio": VAL_RATIO,
+            "eval_strategy": "steps",
+            "load_best_model_at_end": True,
         }, f, indent=2)
 
 

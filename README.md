@@ -39,12 +39,13 @@ python3 train_lora.py
 | Tham số | Giá trị | Ghi chú |
 |---|---|---|
 | **Dataset** | `Teedyyy-rm/Voice_Ngoc_Huyen` | Dataset mới: nhiều giờ audio, có tên riêng truyện, pre-process sạch |
-| **LoRA rank** | 64 | alpha = 128 (2×rank) |
+| **LoRA rank** | 128 | alpha = 256 (2×rank) — như bản V100 cũ chạy tốt |
 | **LoRA dropout** | 0.05 | |
 | **Target modules** | q,k,v,o + gate,up,down | 7 modules |
-| **Epochs** | 10 | ~2048 steps với 3277 mẫu |
-| **Batch** | 4 × 4 grad accum | effective 16 |
-| **Learning rate** | 2e-5 | cosine scheduler, warmup 200 |
+| **Epochs** | 4 | 10 quá nhiều với dataset 14000+ → overfit |
+| **Batch** | 8 × 4 grad accum | effective 32 (V100 dư VRAM) |
+| **Validation** | 5% (VAL_RATIO=0.05) | eval mỗi epoch, `load_best_model_at_end` chống overfit |
+| **Learning rate** | 2e-5 | cosine scheduler, warmup 100 |
 | **Precision** | FP16 | V100 |
 | **Hub output** | `Teedyyy-rm/omnivoice-ngochuyen-lora-v2` | V2 — KHÔNG đè bản cũ |
 
@@ -74,6 +75,7 @@ python3 validate_lora.py --lora-path ./omnivoice_ngochuyen_lora_v2/final_lora --
 | | Bản cũ (`omnivoice-ngochuyen-lora`) | **V2 (repo này)** |
 |---|---|---|
 | Dataset | `pnnbao-ump/ngochuyen_voice` (TIN Vbee, 7540 mẫu) | **`Teedyyy-rm/Voice_Ngoc_Huyen`** (mới, sạch, có tên riêng) |
-| LoRA rank | 128 (qlora_train_v100.py cũ) | 64 (config này) |
-| Trainer | Custom loop | **HF Trainer** |
+| LoRA rank | 128 (qlora_train_v100.py cũ) | 128 (config này) |
+| Epochs | ~15000 steps | 4 epochs (~3500 steps) + eval 5% |
+| Trainer | Custom loop | **HF Trainer** + eval/early-stop |
 | Output | `omnivoice-ngochuyen-lora` | `omnivoice-ngochuyen-lora-v2` |
