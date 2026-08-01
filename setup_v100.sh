@@ -25,12 +25,14 @@ python -c "import torch; assert torch.cuda.is_available(), 'CUDA không khả d�
 
 # 3. Clone repo Lora_TTS
 echo ""
-echo "[3/7] Clone Lora_TTS..."
+echo "[3/7] Clone + pull Lora_TTS (luôn lấy code MỚI NHẤT)..."
 cd /root
 if [ ! -d Lora_TTS ]; then
     git clone https://github.com/Teedyyy-rm/Lora_TTS.git
 fi
 cd Lora_TTS
+git pull --ff-only 2>&1 | tail -1 || true
+echo "  ✅ Code mới nhất: $(git log --oneline -1)"
 
 # 4. Dependencies — requirements.txt ĐÃ PIN versions (torch 2.6, datasets 3.5)
 echo ""
