@@ -82,28 +82,40 @@ def main():
     print(f"📥 Checkpoint mới trên HF (mtime={repo_mtime:.0f} > last={last_ts:.0f})")
     print(f"   Đang tải về: {CACHE_DIR} ...")
     from huggingface_hub import snapshot_download
+    # KHÔNG tải optimizer.pt (616MB vô dụng cho test) — chỉ model + config
     local = snapshot_download(
         repo_id=REPO_ID,
         repo_type="model",
         local_dir=CACHE_DIR,
         token=os.environ.get("HF_TOKEN"),
+        ignore_patterns=["*.pt", "*.pth", "runs/*", "*.bin"],
     )
     print(f"✅ Đã tải về: {local}")
 
-    # 4. Tìm checkpoint mới nhất (thư mục checkpoint-*)
-    checkpoints = sorted(
-        [d for d in os.listdir(local) if d.startswith("checkpoint-")],
-        key=lambda d: int(d.split("-")[-1]),
+    # 4. Tìm checkpoint: ưu tiên final_lora (adapter LoRA riêng — sau train xong),
+    #    fallback thư mục checkpoint-* (full model)
+    checkpoints = []
+    final_lora = os.path.join(local, "final_lora")
+    if os.path.isdir(final_lora) and os.path.exists(
+        os.path.join(final_lora, "adapter_config.json")
+    ):
+        checkpoints.append(final_lora)
+    checkpoints += sorted(
+        [os.path.join(local, d) for d in os.listdir(local)
+         if d.startswith("checkpoint-")],
+        key=lambda d: int(os.path.basename(d).split("-")[-1]),
     )
     if not checkpoints:
-        print("ℹ️  Không thấy thư mục checkpoint-* trong repo — bỏ qua", file=sys.stderr)
+        print("ℹ️  Chưa có checkpoint-* hoặc final_lora trong repo — bỏ qua",
+              file=sys.stderr)
         return
 
-    latest = os.path.join(local, checkpoints[-1])
+    latest = checkpoints[-1]
     print(f"   Checkpoint mới nhất: {latest}")
 
     # 5. Chạy validate → sinh WAV test
-    out_wav = os.path.join(OUTPUT_DIR, f"test_{checkpoints[-1]}.wav")
+    tag = os.path.basename(latest)  # checkpoint-XXX hoặc final_lora
+    out_wav = os.path.join(OUTPUT_DIR, f"test_{tag}.wav")
     cmd = [
         sys.executable, VALIDATE,
         "--lora_path", latest,
