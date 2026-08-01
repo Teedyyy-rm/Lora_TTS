@@ -375,7 +375,8 @@ def main():
         save_steps=max(1, steps_per_epoch // 2),  # save 2 lần/epoch → test được nhiều điểm
         save_total_limit=6,
         eval_strategy="steps",
-        eval_steps=steps_per_epoch,          # eval 1 lần/epoch
+        eval_steps=max(1, steps_per_epoch // 2),  # eval CÙNG tần suất save (bắt buộc: save_steps
+                                                  # phải là bội của eval_steps cho load_best_model_at_end)
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         fp16=True,
