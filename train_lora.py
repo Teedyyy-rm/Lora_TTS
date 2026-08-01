@@ -207,7 +207,9 @@ def main():
         ],
         lora_dropout=0.05,
         bias="none",
-        task_type=TaskType.CAUSAL_LM,   # GIỐNG bản cũ (không phải FEATURE_EXTRACTION)
+        # FEATURE_EXTRACTION — m.llm là Qwen3Model thuần (không có lm_head),
+        # CAUSAL_LM cần Qwen3ForCausalLM → crash. Fix nhiễu = KHÔNG freeze audio_*
+        task_type=TaskType.FEATURE_EXTRACTION,
     )
     m.llm = get_peft_model(m.llm, lora_config)
     m.llm.print_trainable_parameters()
@@ -340,7 +342,7 @@ def main():
             "lora_rank": lora_config.r,
             "lora_alpha": lora_config.lora_alpha,
             "target_modules": list(lora_config.target_modules),
-            "task_type": "CAUSAL_LM",
+            "task_type": "FEATURE_EXTRACTION",
             "epochs": training_args.num_train_epochs,
             "batch_size": training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps,
             "learning_rate": training_args.learning_rate,
