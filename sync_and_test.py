@@ -82,19 +82,30 @@ def main():
     print(f"📥 Checkpoint mới trên HF (mtime={repo_mtime:.0f} > last={last_ts:.0f})")
     print(f"   Đang tải về: {CACHE_DIR} ...")
     from huggingface_hub import snapshot_download
-    # KHÔNG tải optimizer.pt (616MB vô dụng cho test) — chỉ model + config
+    # KHÔNG tải training state (vô dụng cho test) — nhưng PHẢI GIỮ audio_specific.pt!
+    # ⚠️ Đừng dùng ignore "*.pt" chung — nó sẽ bỏ cả audio_specific.pt (~65MB,
+    #    audio_heads+embeddings đã train, THIẾU nó = giọng nhiễu). Chỉ ignore file cụ thể.
     local = snapshot_download(
         repo_id=REPO_ID,
         repo_type="model",
         local_dir=CACHE_DIR,
         token=os.environ.get("HF_TOKEN"),
-        ignore_patterns=["*.pt", "*.pth", "runs/*", "*.bin"],
+        ignore_patterns=["optimizer.pt", "scheduler.pt", "scaler.pt",
+                         "rng_state.pth", "runs/*", "*.bin", "training_args.bin"],
     )
     print(f"✅ Đã tải về: {local}")
 
-    # 4. Tìm checkpoint: ưu tiên final_lora (adapter LoRA riêng — sau train xong),
-    #    fallback thư mục checkpoint-* (full model)
+    # 4. Tìm checkpoint: ưu tiên adapters/checkpoint-* (adapter chuẩn + audio_specific.pt
+    #    do PushAdapterOnSave push mỗi epoch — chỉ ~230MB, test được NGAY giữa chừng),
+    #    rồi final_lora (adapter sau train xong), cuối cùng checkpoint-* (full model 2.2GB)
     checkpoints = []
+    adapters_dir = os.path.join(local, "adapters")
+    if os.path.isdir(adapters_dir):
+        checkpoints += sorted(
+            [os.path.join(adapters_dir, d) for d in os.listdir(adapters_dir)
+             if d.startswith("checkpoint-")],
+            key=lambda d: int(os.path.basename(d).split("-")[-1]),
+        )
     final_lora = os.path.join(local, "final_lora")
     if os.path.isdir(final_lora) and os.path.exists(
         os.path.join(final_lora, "adapter_config.json")
@@ -110,8 +121,16 @@ def main():
               file=sys.stderr)
         return
 
-    latest = checkpoints[-1]
-    print(f"   Checkpoint mới nhất: {latest}")
+    # Chọn bản TỐT NHẤT theo thứ tự ưu tiên (tránh tải full model 2.2GB khi có adapter):
+    # 1) final_lora (adapter chuẩn sau train xong — best theo eval_loss)
+    # 2) adapters/checkpoint-N mới nhất (đang train — test từng epoch, chỉ ~230MB)
+    # 3) checkpoint-N full model (fallback cuối — nặng 2.2GB, cần trích LoRA keys tay)
+    if final_lora in checkpoints:
+        latest = final_lora
+    else:
+        adapter_ckpts = [c for c in checkpoints if "/adapters/" in c]
+        latest = adapter_ckpts[-1] if adapter_ckpts else checkpoints[-1]
+    print(f"   Checkpoint dùng: {latest}")
 
     # 5. Chạy validate → sinh WAV test
     tag = os.path.basename(latest)  # checkpoint-XXX hoặc final_lora

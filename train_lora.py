@@ -19,6 +19,7 @@ from datasets import load_from_disk
 from transformers import (
     TrainingArguments,
     Trainer,
+    TrainerCallback,
     Qwen3Model,           # Backbone bên trong OmniVoice
 )
 from peft import get_peft_model, LoraConfig, TaskType
@@ -154,6 +155,63 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
     return processed
 
     return processed
+
+
+class PushAdapterOnSave(TrainerCallback):
+    """Sau mỗi lần Trainer save checkpoint (mỗi epoch): trích LoRA adapter chuẩn
+    + audio_specific.pt → push lên HF (adapters/checkpoint-{step}/).
+
+    Mục đích (fix: hub_strategy=checkpoint chỉ push FULL MODEL 2.2GB + optimizer 616MB,
+    KHÔNG có adapter_config.json → máy cá nhân không test được giữa chừng):
+    mỗi epoch, m.llm.save_pretrained() tạo adapter chuẩn (~160MB, có adapter_config.json)
+    + audio_specific.pt (~65MB) → upload lên HF. Máy cá nhân tải ~230MB là TEST ĐƯỢC
+    NGAY mà không cần đợi train xong, không cần tải full model 2.2GB.
+    """
+
+    def __init__(self, model, hub_model_id, hub_token, output_dir):
+        self.model = model            # OmniVoice wrapper (m.llm = PeftModel)
+        self.hub_model_id = hub_model_id
+        self.hub_token = hub_token
+        self.output_dir = output_dir
+
+    def on_save(self, args, state, control, **kwargs):
+        if not state.is_world_process_zero:
+            return
+        step = state.global_step
+        if step <= 0:
+            return
+        try:
+            # 1. LoRA adapter chuẩn (adapter_config.json + adapter_model.safetensors)
+            adapter_dir = os.path.join(self.output_dir, f"adapter_step{step}")
+            os.makedirs(adapter_dir, exist_ok=True)
+            self.model.llm.save_pretrained(adapter_dir)
+
+            # 2. audio_specific.pt — CHỈ audio_heads + audio_embeddings (không tokenizer)
+            torch.save(
+                {n: p.detach().cpu() for n, p in self.model.named_parameters()
+                 if ("audio_" in n and "llm" not in n
+                     and "audio_tokenizer" not in n)},
+                os.path.join(adapter_dir, "audio_specific.pt"),
+            )
+
+            # 3. Push lên HF: adapters/checkpoint-{step}/
+            from huggingface_hub import HfApi
+            api = HfApi()
+            api.upload_folder(
+                folder_path=adapter_dir,
+                repo_id=self.hub_model_id,
+                repo_type="model",
+                path_in_repo=f"adapters/checkpoint-{step}",
+                token=self.hub_token,
+            )
+            size_mb = os.path.getsize(
+                os.path.join(adapter_dir, "adapter_model.safetensors")) / 1e6
+            print(f"✅ [PushAdapterOnSave] step {step}: adapter ({size_mb:.0f}MB) "
+                  f"+ audio_specific.pt → adapters/checkpoint-{step} trên HF",
+                  flush=True)
+        except Exception as e:
+            print(f"⚠️ [PushAdapterOnSave] step {step} push lỗi (train vẫn tiếp tục): {e}",
+                  flush=True)
 
 
 def main():
@@ -314,7 +372,15 @@ def main():
         train_dataset=train_processed,
         eval_dataset=val_processed,
         data_collator=DataCollatorForOmniVoice(),
-        callbacks=[DetailedLogCallback()],
+        callbacks=[
+            DetailedLogCallback(),
+            PushAdapterOnSave(
+                model=m,
+                hub_model_id="Teedyyy-rm/LoRa_Ngoc_Huyen_2.0",
+                hub_token=os.environ.get("HF_TOKEN"),
+                output_dir=output_dir,
+            ),
+        ],
     )
 
     # ── Train ──

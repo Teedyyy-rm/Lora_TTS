@@ -61,8 +61,21 @@ def main():
         # Nạp trực tiếp vào m.llm đã ở trên CUDA
         m.llm = PeftModel.from_pretrained(m.llm, args.lora_path)
         print(f"✅ LoRA loaded: {args.lora_path}")
+
+    # ── Load audio_specific.pt (audio_heads + audio_embeddings — BẮT BUỘC) ──
+    # LoRA finetune v2 train CẢ audio_* cùng (fix nhiễu gốc) → khi test PHẢI load
+    # audio_specific.pt nếu có trong thư mục adapter, nếu không giọng sẽ NHIỄU
+    # (LoRA đổi hidden_states → audio_heads base cũ không khớp).
+    audio_specific_path = os.path.join(args.lora_path, "audio_specific.pt")
+    if os.path.exists(audio_specific_path):
+        audio_sd = torch.load(audio_specific_path, map_location="cpu", weights_only=True)
+        missing, unexpected = m.load_state_dict(audio_sd, strict=False)
+        print(f"✅ audio_specific.pt loaded ({len(audio_sd)} keys, "
+              f"missing={len(missing)}, unexpected={len(unexpected)})")
     else:
-        print("⚠️ No LoRA path provided, using base model only")
+        print("⚠️ KHÔNG có audio_specific.pt trong adapter — nếu model train audio_* "
+              "thì giọng sẽ NHIỄU (thiếu heads/embeddings đã train)!")
+
 
     torch.cuda.empty_cache()
 
