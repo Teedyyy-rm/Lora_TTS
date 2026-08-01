@@ -34,13 +34,14 @@ logger = logging.getLogger(__name__)
 # ── Hyperparameters V3 (tối ưu CHẤT LƯỢNG — Aug 2, V100 mới 16GB) ──
 # Ưu tiên chất lượng giọng, không cần nhanh:
 #   - 3 epochs (KHÔNG 4 — đã chứng minh epoch 4 overfit: eval_loss thấp nhưng nhiễu 25%)
-#   - batch 16 × 2 accum = effective 32 (giữ nhịp học như bản chạy tốt, gradient mượt hơn;
-#     8→16 tận dụng VRAM dư; bắt buộc gradient_checkpointing=True)
+#   - batch 8 × 4 accum = effective 32 (⚠️ KHÔNG dùng batch 16: OmniVoice KHÔNG hỗ
+#     trợ gradient_checkpointing — batch 16 không checkpointing = ~22GB OOM. Batch 8
+#     không checkpointing = 10.9GB/16GB — đã verify trên V100 cũ)
 #   - dropout 0.0 (Unsloth: LoRA dropout không hữu ích cho TTS, 0 = consistency)
 NUM_EPOCHS = 3          # 4 → 3: chống overfit (checkpoint-1329 epoch 3 = giọng chuẩn)
 VAL_RATIO = 0.05        # 5% validation set (phát hiện overfit, giữ best)
-BATCH_SIZE = 16         # 8 → 16: tận dụng VRAM dư 6GB, gradient ổn định
-GRAD_ACCUM = 2          # 4 → 2: giữ effective 32 (16×2)
+BATCH_SIZE = 8          # 16 → 8: OmniVoice không hỗ trợ gradient checkpointing
+GRAD_ACCUM = 4          # effective batch = 32 (8×4)
 
 
 @dataclass
@@ -390,7 +391,7 @@ def main():
         report_to="tensorboard",
         logging_dir=os.path.join(output_dir, "logs"),
         logging_first_step=True,
-        gradient_checkpointing=True,   # BẮT BUỘC với batch 16 (không bật = OOM ~22GB)
+        gradient_checkpointing=False,   # OmniVoice KHÔNG hỗ trợ — batch 8 không cần
         optim="adamw_torch",
     )
 
