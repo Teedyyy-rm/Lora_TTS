@@ -219,7 +219,13 @@ class PushAdapterOnSave(TrainerCallback):
                 os.path.join(adapter_dir, "audio_specific.pt"),
             )
 
-            # 3. Push lên HF: adapters/checkpoint-{step}/
+            # 3. ⚠️ XÓA README.md PEFT tự tạo (frontmatter không hợp lệ → upload_folder
+            #    fail "Invalid metadata in README.md"). Chỉ upload adapter + config + audio.
+            readme = os.path.join(adapter_dir, "README.md")
+            if os.path.exists(readme):
+                os.remove(readme)
+
+            # 4. Push lên HF: adapters/checkpoint-{step}/
             from huggingface_hub import HfApi
             api = HfApi()
             api.upload_folder(
