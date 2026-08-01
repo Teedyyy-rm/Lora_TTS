@@ -186,6 +186,14 @@ def main():
     )
     logger.info(f"Loaded: OmniVoice (LLM={type(m.llm).__name__})")
 
+    # ── Cast TOÀN BỘ model về FP16 ──
+    # OmniVoice load torch_dtype=float16 nhưng acoustic_encoder (conv layers)
+    # vẫn FP32 → khi train audio_* cùng GradScaler FP16 → lỗi
+    # "Attempting to unscale FP16 gradients". Cast ép tất cả về fp16.
+    fp32_cnt = sum(1 for p in m.parameters() if p.dtype != torch.float16)
+    m = m.half()
+    logger.info(f"Cast FP16: {fp32_cnt} params FP32 → FP16")
+
     # ── Freeze model: CHỈ freeze những gì KHÔNG cần train ──
     # QUAN TRỌNG: KHÔNG freeze audio_embeddings + audio_heads!
     # LoRA thay đổi m.llm → hidden_states mới → audio_heads phải train theo
