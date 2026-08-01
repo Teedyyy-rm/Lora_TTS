@@ -230,8 +230,12 @@ class PushAdapterOnSave(TrainerCallback):
             )
             size_mb = os.path.getsize(
                 os.path.join(adapter_dir, "adapter_model.safetensors")) / 1e6
-            print(f"✅ [PushAdapterOnSave] step {step}: adapter ({size_mb:.0f}MB) "
+            print(f"────────────────────────────────────────────────────────────────",
+                  flush=True)
+            print(f"🚀 [PushAdapterOnSave] step {step}: adapter ({size_mb:.0f}MB) "
                   f"+ audio_specific.pt → adapters/checkpoint-{step} trên HF",
+                  flush=True)
+            print(f"────────────────────────────────────────────────────────────────",
                   flush=True)
         except Exception as e:
             print(f"⚠️ [PushAdapterOnSave] step {step} push lỗi (train vẫn tiếp tục): {e}",
