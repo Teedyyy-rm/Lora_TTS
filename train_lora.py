@@ -186,6 +186,25 @@ class PushAdapterOnSave(TrainerCallback):
             os.makedirs(adapter_dir, exist_ok=True)
             self.model.llm.save_pretrained(adapter_dir)
 
+            # 1b. ⚠️ SANITIZE adapter_config.json — peft V100 (0.20) viết 40+ keys mới
+            #     (alora_invocation_tokens, arrow_config, corda_config, eva_config,
+            #      megatron_core, monteclora_config, velora_config, use_dora, use_rslora...)
+            #     mà peft máy cá nhân (0.12) KHÔNG hiểu → LoraConfig crash
+            #     ('unexpected keyword argument'). Chỉ giữ whitelist peft 0.12 hiểu.
+            import json as _json
+            cfg_path = os.path.join(adapter_dir, "adapter_config.json")
+            raw_cfg = _json.load(open(cfg_path))
+            whitelist = {
+                "peft_type", "r", "lora_alpha", "lora_dropout", "bias",
+                "task_type", "target_modules", "base_model_name_or_path",
+                "fan_in_fan_out", "init_lora_weights",
+            }
+            clean_cfg = {k: raw_cfg[k] for k in whitelist if k in raw_cfg}
+            with open(cfg_path, "w") as fp:
+                _json.dump(clean_cfg, fp, indent=2)
+            print(f"  adapter_config.json sanitized: {len(raw_cfg)} → {len(clean_cfg)} keys",
+                  flush=True)
+
             # 2. audio_specific.pt — CHỈ audio_heads + audio_embeddings (không tokenizer)
             torch.save(
                 {n: p.detach().cpu() for n, p in self.model.named_parameters()

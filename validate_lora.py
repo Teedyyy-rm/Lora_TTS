@@ -54,6 +54,24 @@ def main():
     if os.path.exists(args.lora_path) or "/" in args.lora_path:
         print(f"Loading LoRA from: {args.lora_path}")
 
+        # ⚠️ SANITIZE adapter_config.json trước khi load (peft V100 0.20 viết 40+ keys
+        # mới mà peft máy cá nhân 0.12 không hiểu → LoraConfig crash). Chỉ giữ whitelist.
+        cfg_path = os.path.join(args.lora_path, "adapter_config.json")
+        if os.path.exists(cfg_path):
+            import json as _json
+            raw_cfg = _json.load(open(cfg_path))
+            whitelist = {
+                "peft_type", "r", "lora_alpha", "lora_dropout", "bias",
+                "task_type", "target_modules", "base_model_name_or_path",
+                "fan_in_fan_out", "init_lora_weights",
+            }
+            clean_cfg = {k: raw_cfg[k] for k in whitelist if k in raw_cfg}
+            if len(clean_cfg) != len(raw_cfg):
+                with open(cfg_path, "w") as fp:
+                    _json.dump(clean_cfg, fp, indent=2)
+                print(f"  ⚠️ adapter_config.json sanitized: {len(raw_cfg)} → "
+                      f"{len(clean_cfg)} keys (peft V100 0.20 → local 0.12)")
+
         # Vá lỗi thiếu hàm sinh từ của lớp backbone gốc
         if not hasattr(m.llm, "prepare_inputs_for_generation"):
             m.llm.prepare_inputs_for_generation = lambda **kwargs: kwargs
