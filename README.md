@@ -47,7 +47,7 @@ python3 train_lora.py
 | **Validation** | 5% (VAL_RATIO=0.05) | eval mỗi epoch, `load_best_model_at_end` chống overfit |
 | **Learning rate** | 2e-5 | cosine scheduler, warmup 100 |
 | **Precision** | FP16 | V100 |
-| **Hub output** | `Teedyyy-rm/omnivoice-ngochuyen-lora-v2` | V2 — KHÔNG đè bản cũ |
+| **Hub output** | `Teedyyy-rm/LoRa_Ngoc_Huyen_2.0` | **PRIVATE** — Ngọc Huyền 2.0, KHÔNG đè bản cũ |
 
 ## 📂 Các file
 
@@ -78,4 +78,4 @@ python3 validate_lora.py --lora-path ./omnivoice_ngochuyen_lora_v2/final_lora --
 | LoRA rank | 128 (qlora_train_v100.py cũ) | 128 (config này) |
 | Epochs | ~15000 steps | 4 epochs (~3500 steps) + eval 5% |
 | Trainer | Custom loop | **HF Trainer** + eval/early-stop |
-| Output | `omnivoice-ngochuyen-lora` | `omnivoice-ngochuyen-lora-v2` |
+| Output | `omnivoice-ngochuyen-lora` | `LoRa_Ngoc_Huyen_2.0` |

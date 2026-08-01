@@ -160,7 +160,7 @@ def main():
     # ── Paths (điều chỉnh cho V100 Docker) ──
     base_model_path = "./base_model/omnivoice-vietnamese"
     dataset_path = "./dataset/ngochuyen_voice"     # sau khi clone dataset mới
-    output_dir = "./omnivoice_ngochuyen_lora_v2"   # V2 — KHÔNG đè bản cũ
+    output_dir = "./omnivoice_ngochuyen_lora_2.0"  # Ngọc Huyền 2.0 — KHÔNG đè bản cũ
 
     # ── Clone dataset MỚI từ HuggingFace (nếu chưa có) ──
     # Dataset mới: Teedyyy-rm/Voice_Ngoc_Huyen (nhiều giờ audio, có tên riêng truyện,
@@ -285,7 +285,7 @@ def main():
         dataloader_num_workers=4,
         remove_unused_columns=False,
         push_to_hub=True,
-        hub_model_id="Teedyyy-rm/omnivoice-ngochuyen-lora-v2",
+        hub_model_id="Teedyyy-rm/LoRa_Ngoc_Huyen_2.0",
         hub_strategy="checkpoint",
         hub_token=os.environ.get("HF_TOKEN"),
         report_to="tensorboard",
@@ -321,6 +321,7 @@ def main():
         json.dump({
             "base_model": base_model_path,
             "dataset": "Teedyyy-rm/Voice_Ngoc_Huyen",
+            "voice_name": "Ngọc Huyền 2.0",
             "lora_rank": lora_config.r,
             "lora_alpha": lora_config.lora_alpha,
             "target_modules": lora_config.target_modules,

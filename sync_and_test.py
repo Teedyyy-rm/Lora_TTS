@@ -22,11 +22,11 @@ import sys
 import time
 
 # ── Config ──
-REPO_ID = "Teedyyy-rm/omnivoice-ngochuyen-lora-v2"
-CACHE_DIR = os.path.expanduser("~/projects/Models/lora_v2_checkpoints")
-STATE_FILE = os.path.expanduser("~/.cache/lora_v2_last_ts.txt")
-OUTPUT_DIR = os.path.expanduser("~/projects/Models/lora_v2_tests")
-VALIDATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "validate_lora.py")
+REPO_ID = "Teedyyy-rm/LoRa_Ngoc_Huyen_2.0"   # PRIVATE — Ngọc Huyền 2.0
+CACHE_DIR = os.path.expanduser("~/projects/Models/lora_2.0_checkpoints")
+STATE_FILE = os.path.expanduser("~/.cache/lora_2.0_last_ts.txt")
+OUTPUT_DIR = os.path.expanduser("~/projects/Models/lora_2.0_tests")
+VALIDATE = os.path.expanduser("~/projects/Models/lora_v2_validate.py")
 
 # Câu test mặc định — câu dài + tên riêng (kiểm tra nuốt chữ)
 DEFAULT_TEXT = (
