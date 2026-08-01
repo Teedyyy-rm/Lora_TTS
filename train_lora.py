@@ -186,9 +186,13 @@ def main():
     )
     logger.info(f"Loaded: OmniVoice (LLM={type(m.llm).__name__})")
 
-    # ── Freeze everything EXCEPT m.llm ──
+    # ── Freeze model: CHỈ freeze những gì KHÔNG cần train ──
+    # QUAN TRỌNG: KHÔNG freeze audio_embeddings + audio_heads!
+    # LoRA thay đổi m.llm → hidden_states mới → audio_heads phải train theo
+    # (bản cũ qlora_train_v100.py train cả audio_* → giọng chuẩn;
+    #  bản freeze audio_* → nhiễu vì heads không khớp với llm mới)
     for name, param in m.named_parameters():
-        if "llm" not in name:
+        if "llm" not in name and "audio_" not in name:
             param.requires_grad = False
 
     # ── Apply LoRA to m.llm (Qwen3Model, base transformer) ──
@@ -203,7 +207,7 @@ def main():
         ],
         lora_dropout=0.05,
         bias="none",
-        task_type=TaskType.FEATURE_EXTRACTION,
+        task_type=TaskType.CAUSAL_LM,   # GIỐNG bản cũ (không phải FEATURE_EXTRACTION)
     )
     m.llm = get_peft_model(m.llm, lora_config)
     m.llm.print_trainable_parameters()
@@ -315,6 +319,17 @@ def main():
     m.llm.save_pretrained(final_path)
     logger.info(f"Final LoRA saved to: {final_path}")
 
+    # ── Save audio_specific.pt (audio_embeddings + audio_heads) ──
+    # QUAN TRỌNG: bản cũ qlora_train_v100.py lưu file này — StoryCast load
+    # cả LoRA + audio_specific khi inference. Thiếu → heads cũ không khớp
+    # với llm mới → audio nhiễu.
+    torch.save(
+        {n: p.detach().cpu() for n, p in m.named_parameters()
+         if "audio_" in n and "llm" not in n},
+        os.path.join(final_path, "audio_specific.pt"),
+    )
+    logger.info(f"audio_specific.pt saved (audio_embeddings + audio_heads)")
+
     # ── Also save config ──
     import json
     with open(os.path.join(final_path, "training_config.json"), "w") as f:
@@ -324,8 +339,8 @@ def main():
             "voice_name": "Ngọc Huyền 2.0",
             "lora_rank": lora_config.r,
             "lora_alpha": lora_config.lora_alpha,
-            "target_modules": lora_config.target_modules,
-            "task_type": "FEATURE_EXTRACTION",
+            "target_modules": list(lora_config.target_modules),
+            "task_type": "CAUSAL_LM",
             "epochs": training_args.num_train_epochs,
             "batch_size": training_args.per_device_train_batch_size * training_args.gradient_accumulation_steps,
             "learning_rate": training_args.learning_rate,
