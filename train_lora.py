@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 #    overfit — chọn bản cuối bằng NGHE/phổ, PushAdapterOnSave đã push từng
 #    adapter_step lên HF để test tay).
 import argparse
+import os
 
 DATASET_CFG = {
     # new: dataset mới, 3 epochs (bài học: epoch 4 overfit trên data lớn)
@@ -75,10 +76,58 @@ DATASET_CFG = {
 
 def parse_args():
     ap = argparse.ArgumentParser(description="Finetune LoRA OmniVoice (Ngọc Huyền)")
-    ap.add_argument("--dataset", choices=list(DATASET_CFG.keys()), default="new",
+    ap.add_argument("--dataset", choices=list(DATASET_CFG.keys()), default=None,
                     help="new=Voice_Ngoc_Huyen 14.9k mẫu (3 epochs, batch 8×4) | "
-                         "old=ngochuyen_voice 7.5k mẫu (10 epochs, batch 4×4 — theo checkpoint cũ)")
+                         "old=ngochuyen_voice 7.5k mẫu (10 epochs, batch 4×4 — theo checkpoint cũ). "
+                         "Nếu bỏ trống → lấy từ config.yaml (nếu có), nếu không → 'new'")
+    ap.add_argument("--config", default="config.yaml",
+                    help="Path config.yaml (mặc định ./config.yaml) — bỏ trống để dùng default code")
     return ap.parse_args()
+
+
+def load_yaml_config(path="config.yaml"):
+    """Đọc config.yaml nếu tồn tại → dict. Không có file → {} (dùng default code).
+
+    Ưu tiên: CLI arg (--dataset) > config.yaml > default trong DATASET_CFG/code.
+    """
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        import yaml
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    except ImportError:
+        print("⚠️ PyYAML chưa cài — bỏ qua config.yaml, dùng default code")
+        return {}
+    except Exception as e:
+        print(f"⚠️ Lỗi đọc {path}: {e} — dùng default code")
+        return {}
+
+
+def resolve_config(args):
+    """Kết hợp: default DATASET_CFG ← config.yaml ← CLI args."""
+    ycfg = load_yaml_config(args.config)
+
+    # 1. Chọn dataset: CLI > config.yaml > 'new'
+    dataset = args.dataset or ycfg.get("dataset", "new")
+    if dataset not in DATASET_CFG:
+        print(f"⚠️ dataset '{dataset}' không hợp lệ — dùng 'new'")
+        dataset = "new"
+
+    # 2. Merge config.yaml datasets.<name> lên default
+    cfg = dict(DATASET_CFG[dataset])
+    yds = ycfg.get("datasets", {}).get(dataset, {})
+    cfg.update({k: v for k, v in yds.items() if v is not None})
+
+    # 3. Config chung training.* (ghi đè nếu có)
+    ytr = ycfg.get("training", {})
+    cfg["training"] = {k: v for k, v in ytr.items() if v is not None}
+
+    # 4. Preprocess config (ghi đè nếu có)
+    ypp = ycfg.get("preprocess", {})
+    cfg["preprocess"] = {k: v for k, v in ypp.items() if v is not None}
+
+    return dataset, cfg
 
 
 # ── Hyperparameters V3 (tối ưu CHẤT LƯỢNG — Aug 2, V100 mới 16GB) ──
@@ -136,14 +185,26 @@ class DataCollatorForOmniVoice:
         }
 
 
-def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
+def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer, pcfg=None):
     """Convert raw audio + text to OmniVoice input format (on CPU).
 
     Dataset features: audio (array), transcription (str), file_name (str)
+    pcfg: dict từ config.yaml preprocess.* (drop_cond_ratio, prompt_ratio_range,
+          mask_ratio_range, audio_mask_id, language, instruct) — mặc định theo chuẩn.
     """
     device = "cuda" if torch.cuda.is_available() else "cpu"
     processed = []
     from tqdm import tqdm
+
+    # ── Preprocess config (từ config.yaml hoặc mặc định chuẩn OmniVoice) ──
+    pcfg = pcfg or {}
+    drop_cond_ratio = float(pcfg.get("drop_cond_ratio", 0.1))
+    prompt_range = pcfg.get("prompt_ratio_range", [0.0, 0.3])
+    mask_range = pcfg.get("mask_ratio_range", [0.0, 1.0])
+    audio_mask_id = int(pcfg.get("audio_mask_id", 1024))
+    language = pcfg.get("language", "vi")
+    instruct = pcfg.get("instruct", "None")
+    rms_norm = float(pcfg.get("rms_normalize", 0.13))
 
     for i, sample in enumerate(tqdm(dataset, desc="Encoding audio→tokens", unit="samples")):
         audio_field = sample["audio"]
@@ -169,7 +230,7 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
         # Normalize RMS
         rms = torch.sqrt(torch.mean(audio_t ** 2))
         if rms > 0:
-            audio_t = audio_t * (0.13 / rms)
+            audio_t = audio_t * (rms_norm / rms)
 
         # Encode audio → tokens: [1, 8, time] — encode on CPU, avoid VRAM leak
         with torch.no_grad():
@@ -179,19 +240,28 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
 
         import random
 
-        # 1. Định dạng văn bản đúng chuẩn OmniVoice (kèm các tag đặc biệt)
-        # Giả định language='vi', instruct='None' (hoặc lấy từ dataset nếu có)
-        full_text = f"<|lang_start|>vi<|lang_end|><|instruct_start|>None<|instruct_end|><|text_start|>{text}<|text_end|>"
-        text_tokens = text_tokenizer.encode(full_text, add_special_tokens=False)
+        # CFG (Classifier-Free Guidance) Dropout: Rất quan trọng để giảm nhiễu và vấp câu!
+        # Dành drop_cond_ratio (mặc định 10%) tỷ lệ bắt mô hình học sinh âm thanh mà
+        # không có text/prompt (unconditional). Nhờ vậy, khi test với guidance_scale=2.0,
+        # tín hiệu text sẽ được kích mạnh lên chuẩn xác.
+        drop_cond = random.random() < drop_cond_ratio
+
+        if drop_cond:
+            text_tokens = []
+            prompt_ratio = 0.0
+        else:
+            # 1. Định dạng văn bản đúng chuẩn OmniVoice (kèm các tag đặc biệt)
+            full_text = f"<|lang_start|>{language}<|lang_end|><|instruct_start|>{instruct}<|instruct_end|><|text_start|>{text}<|text_end|>"
+            text_tokens = text_tokenizer.encode(full_text, add_special_tokens=False)
+            # Giữ lại một phần ngẫu nhiên làm prompt (0% - 30%)
+            prompt_ratio = random.uniform(*prompt_range)
 
         num_text = len(text_tokens)
         num_audio = audio_tokens.shape[1]
         seq_len = num_text + num_audio
 
-        # 2. Audio Masking Logic (Tính năng quan trọng nhất của Flow-Matching/Masked LLM)
-        # Giữ lại một phần ngẫu nhiên làm prompt (0% - 30%), che đi phần còn lại (0% - 100%)
-        prompt_ratio = random.uniform(0.0, 0.3)
-        mask_ratio = random.uniform(0.0, 1.0)
+        # 2. Audio Masking Logic (Flow-Matching)
+        mask_ratio = random.uniform(*mask_range)
         
         prompt_length = int(num_audio * prompt_ratio)
         audio_inputs = audio_tokens.clone()
@@ -201,8 +271,8 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
         maskable_region = audio_inputs[:, prompt_length:]
         token_mask = torch.rand(maskable_region.shape) < mask_ratio
         
-        # Gán token bị che thành 1024 (audio_mask_id)
-        audio_inputs[:, prompt_length:][token_mask] = 1024
+        # Gán token bị che thành audio_mask_id (1024)
+        audio_inputs[:, prompt_length:][token_mask] = audio_mask_id
         
         # Labels: Chỉ tính Loss trên các token BỊ CHE, các vùng khác gán -100
         audio_labels[:, prompt_length:][~token_mask] = -100
@@ -210,9 +280,8 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
 
         # 3. Build input_ids: [8, seq_len]
         input_ids = torch.zeros((8, seq_len), dtype=torch.long)
-        # Điền text vào tất cả 8 layer (mô hình sẽ chỉ đọc từ layer 0 cho text)
-        input_ids[:, :num_text] = torch.tensor(text_tokens, dtype=torch.long).unsqueeze(0).repeat(8, 1)
-        # Điền phần audio đã được che (mask)
+        if num_text > 0:
+            input_ids[:, :num_text] = torch.tensor(text_tokens, dtype=torch.long).unsqueeze(0).repeat(8, 1)
         input_ids[:, num_text:] = audio_inputs
 
         # 4. audio_mask: 0=text, 1=audio (để model biết áp dụng embedding nào)
@@ -221,7 +290,8 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
 
         # 5. labels: text không tính loss (-100), chỉ audio_labels tính loss
         labels = torch.zeros((8, seq_len), dtype=torch.long)
-        labels[:, :num_text] = -100
+        if num_text > 0:
+            labels[:, :num_text] = -100
         labels[:, num_text:] = audio_labels
 
         processed.append({
@@ -324,16 +394,20 @@ class PushAdapterOnSave(TrainerCallback):
 
 def main():
     args = parse_args()
-    cfg = DATASET_CFG[args.dataset]
+    dataset_name, cfg = resolve_config(args)
     NUM_EPOCHS = cfg["num_epochs"]
     VAL_RATIO = cfg["val_ratio"]
     BATCH_SIZE = cfg["batch_size"]
     GRAD_ACCUM = cfg["grad_accum"]
     WARMUP_STEPS = cfg["warmup_steps"]
     SAVE_PER_EPOCH = cfg["save_per_epoch"]
-    logger.info(f"Dataset: {args.dataset} → {cfg['repo']} | {NUM_EPOCHS} epochs, "
+    PREPROCESS_CFG = cfg.get("preprocess", {})
+    TRAINING_CFG = cfg.get("training", {})
+    logger.info(f"Dataset: {dataset_name} → {cfg['repo']} | {NUM_EPOCHS} epochs, "
                 f"batch {BATCH_SIZE}×{GRAD_ACCUM} (effective {BATCH_SIZE*GRAD_ACCUM}), "
                 f"warmup {WARMUP_STEPS}, save {SAVE_PER_EPOCH} lần/epoch")
+    if PREPROCESS_CFG:
+        logger.info(f"Preprocess config: {PREPROCESS_CFG}")
 
     # ── Paths (điều chỉnh cho V100 Docker) ──
     base_model_path = "./base_model/omnivoice-vietnamese"
@@ -382,13 +456,13 @@ def main():
     # V2 tối ưu: rank 128 (như bản V100 cũ chạy tốt — học chi tiết giọng,
     # giảm "giọng khô") + alpha = 2×rank
     lora_config = LoraConfig(
-        r=128,
-        lora_alpha=256,
+        r=TRAINING_CFG.get("lora_rank", 128),
+        lora_alpha=TRAINING_CFG.get("lora_alpha", 256),
         target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj",
         ],
-        lora_dropout=0.0,   # 0.05 → 0.0 (Unsloth: dropout không hữu ích cho TTS)
+        lora_dropout=TRAINING_CFG.get("lora_dropout", 0.0),  # Unsloth: dropout không hữu ích cho TTS
         bias="none",
         # FEATURE_EXTRACTION — m.llm là Qwen3Model thuần (không có lm_head),
         # CAUSAL_LM cần Qwen3ForCausalLM → crash. Fix nhiễu = KHÔNG freeze audio_*
@@ -425,7 +499,8 @@ def main():
             text_tokenizer.pad_token = text_tokenizer.eos_token
 
     logger.info("Preprocessing dataset (encoding audio → tokens)...")
-    processed = preprocess_dataset(train_data, audio_tokenizer, text_tokenizer)
+    processed = preprocess_dataset(train_data, audio_tokenizer, text_tokenizer,
+                                   pcfg=PREPROCESS_CFG)
     audio_tokenizer.to("cpu")
     logger.info(f"Processed: {len(processed)} samples")
 
@@ -458,8 +533,8 @@ def main():
         num_train_epochs=NUM_EPOCHS,
         per_device_train_batch_size=BATCH_SIZE,
         gradient_accumulation_steps=GRAD_ACCUM,
-        learning_rate=2e-5,
-        lr_scheduler_type="cosine",
+        learning_rate=TRAINING_CFG.get("learning_rate", 2e-5),
+        lr_scheduler_type=TRAINING_CFG.get("lr_scheduler_type", "cosine"),
         warmup_steps=WARMUP_STEPS,
         logging_steps=10,
         save_strategy="steps",

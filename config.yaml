@@ -1,0 +1,62 @@
+# ═══════════════════════════════════════════════════════════════
+# CONFIG TRAIN — OmniVoice LoRA (Ngọc Huyền 2.0)
+# ═══════════════════════════════════════════════════════════════
+# Cách dùng:
+#   - Sửa tham số ở đây (KHÔNG cần sửa code train_lora.py)
+#   - train_lora.py TỰ ĐỘNG đọc file này nếu tồn tại (đặt cạnh train_lora.py)
+#   - Nếu không có config.yaml → dùng giá trị mặc định trong DATASET_CFG (code)
+#
+# Ưu tiên: CLI arg (--dataset) > config.yaml > default trong code
+
+dataset: old                 # old | new
+                             #   old = pnnbao-ump/ngochuyen_voice (7,540 mẫu, 10 epochs, batch 4×4)
+                             #   new = Teedyyy-rm/Voice_Ngoc_Huyen (14,937 mẫu, 3 epochs, batch 8×4)
+
+# ── Dataset (ghi đè DATASET_CFG theo dataset đã chọn) ──
+datasets:
+  old:
+    repo: pnnbao-ump/ngochuyen_voice
+    dataset_path: ./dataset/ngochuyen_voice_old
+    output_dir: ./omnivoice_ngochuyen_lora_old
+    hub_model_id: Teedyyy-rm/LoRa_Ngoc_Huyen_2.0
+    num_epochs: 10
+    val_ratio: 0.05
+    batch_size: 4
+    grad_accum: 4          # effective 16 (đúng checkpoint cũ)
+    warmup_steps: 200
+    save_per_epoch: 1      # save + push 1 lần/epoch
+  new:
+    repo: Teedyyy-rm/Voice_Ngoc_Huyen
+    dataset_path: ./dataset/ngochuyen_voice
+    output_dir: ./omnivoice_ngochuyen_lora_2.0
+    hub_model_id: Teedyyy-rm/LoRa_Ngoc_Huyen_2.0
+    num_epochs: 3
+    val_ratio: 0.05
+    batch_size: 8
+    grad_accum: 4          # effective 32
+    warmup_steps: 100
+    save_per_epoch: 2      # save + push 2 lần/epoch
+
+# ── Hyperparameters chung (ghi đè mọi dataset) ──
+training:
+  learning_rate: 2e-5
+  lr_scheduler_type: cosine
+  lora_rank: 128
+  lora_alpha: 256
+  lora_dropout: 0.0
+  logging_steps: 10
+  save_total_limit: 10
+  fp16: true
+  bf16: false
+  load_best_model_at_end: false   # ⚠️ eval_loss chọn nhầm overfit — chọn bằng NGHE/phổ
+  seed: 42
+
+# ── Data preprocessing (⚠️ ĐỪNG tắt masking — root cause nhiễu đã fix) ──
+preprocess:
+  rms_normalize: 0.13
+  prompt_ratio_range: [0.0, 0.3]   # phần audio giữ làm prompt (không loss)
+  mask_ratio_range: [0.0, 1.0]     # tỷ lệ token bị che (loss chỉ trên phần che)
+  audio_mask_id: 1024
+  drop_cond_ratio: 0.1             # CFG dropout: 10% mẫu không text/prompt (guidance hoạt động)
+  language: vi
+  instruct: None
