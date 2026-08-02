@@ -31,17 +31,52 @@ from dataclasses import dataclass
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ── Chọn dataset: --dataset old|new (Aug 2) ──
+#   new = Teedyyy-rm/Voice_Ngoc_Huyen   (14,937 mẫu, ~20.78h) — 3 epochs
+#   old = pnnbao-ump/ngochuyen_voice    (7,540 mẫu,  ~20h)    — 6 epochs
+#         (data nửa → epochs gấp đôi; để so sánh A/B chất lượng)
+# ⚠️ load_best_model_at_end=False (bài học Aug 2: eval_loss chọn NHẦM checkpoint
+#    overfit — chọn bản cuối bằng NGHE/phổ, PushAdapterOnSave đã push từng
+#    adapter_step lên HF để test tay).
+import argparse
+
+DATASET_CFG = {
+    "new": {
+        "repo": "Teedyyy-rm/Voice_Ngoc_Huyen",
+        "dataset_path": "./dataset/ngochuyen_voice",
+        "output_dir": "./omnivoice_ngochuyen_lora_2.0",
+        "hub_model_id": "Teedyyy-rm/LoRa_Ngoc_Huyen_2.0",
+        "num_epochs": 3,
+        "val_ratio": 0.05,
+    },
+    "old": {
+        "repo": "pnnbao-ump/ngochuyen_voice",
+        "dataset_path": "./dataset/ngochuyen_voice_old",
+        "output_dir": "./omnivoice_ngochuyen_lora_old",
+        "hub_model_id": "Teedyyy-rm/LoRa_Ngoc_Huyen_old",
+        "num_epochs": 6,
+        "val_ratio": 0.05,
+    },
+}
+
+
+def parse_args():
+    ap = argparse.ArgumentParser(description="Finetune LoRA OmniVoice (Ngọc Huyền)")
+    ap.add_argument("--dataset", choices=list(DATASET_CFG.keys()), default="new",
+                    help="new=Voice_Ngoc_Huyen 14.9k mẫu (3 epochs) | old=ngochuyen_voice 7.5k mẫu (6 epochs)")
+    return ap.parse_args()
+
+
 # ── Hyperparameters V3 (tối ưu CHẤT LƯỢNG — Aug 2, V100 mới 16GB) ──
 # Ưu tiên chất lượng giọng, không cần nhanh:
-#   - 3 epochs (KHÔNG 4 — đã chứng minh epoch 4 overfit: eval_loss thấp nhưng nhiễu 25%)
+#   - epochs theo dataset (3 cho 14.9k mẫu, 6 cho 7.5k mẫu — data lớn thì ít epochs,
+#     epoch 4 từng overfit trên data mới: eval_loss thấp nhưng nhiễu 25%)
 #   - batch 8 × 4 accum = effective 32 (⚠️ KHÔNG dùng batch 16: OmniVoice KHÔNG hỗ
 #     trợ gradient_checkpointing — batch 16 không checkpointing = ~22GB OOM. Batch 8
 #     không checkpointing = 10.9GB/16GB — đã verify trên V100 cũ)
 #   - dropout 0.0 (Unsloth: LoRA dropout không hữu ích cho TTS, 0 = consistency)
-NUM_EPOCHS = 3          # 4 → 3: chống overfit (checkpoint-1329 epoch 3 = giọng chuẩn)
-VAL_RATIO = 0.05        # 5% validation set (phát hiện overfit, giữ best)
-BATCH_SIZE = 8          # 16 → 8: OmniVoice không hỗ trợ gradient checkpointing
-GRAD_ACCUM = 4          # effective batch = 32 (8×4)
+BATCH_SIZE = 8          # effective 32 (8×4)
+GRAD_ACCUM = 4
 
 
 @dataclass
@@ -250,19 +285,24 @@ class PushAdapterOnSave(TrainerCallback):
 
 
 def main():
+    args = parse_args()
+    cfg = DATASET_CFG[args.dataset]
+    NUM_EPOCHS = cfg["num_epochs"]
+    VAL_RATIO = cfg["val_ratio"]
+    logger.info(f"Dataset: {args.dataset} → {cfg['repo']} ({NUM_EPOCHS} epochs)")
+
     # ── Paths (điều chỉnh cho V100 Docker) ──
     base_model_path = "./base_model/omnivoice-vietnamese"
-    dataset_path = "./dataset/ngochuyen_voice"     # sau khi clone dataset mới
-    output_dir = "./omnivoice_ngochuyen_lora_2.0"  # Ngọc Huyền 2.0 — KHÔNG đè bản cũ
+    dataset_path = cfg["dataset_path"]         # theo --dataset
+    output_dir = cfg["output_dir"]             # KHÔNG đè bản đang chạy
+    hub_model_id = cfg["hub_model_id"]
 
-    # ── Clone dataset MỚI từ HuggingFace (nếu chưa có) ──
-    # Dataset mới: Teedyyy-rm/Voice_Ngoc_Huyen (nhiều giờ audio, có tên riêng truyện,
-    # pre-process sạch: trim silence, ép thở, volume chuẩn, relative path)
+    # ── Clone dataset từ HuggingFace (nếu chưa có) ──
     if not os.path.isdir(dataset_path):
-        logger.info("Cloning dataset từ HuggingFace: Teedyyy-rm/Voice_Ngoc_Huyen ...")
+        logger.info(f"Cloning dataset từ HuggingFace: {cfg['repo']} ...")
         from huggingface_hub import snapshot_download
         snapshot_download(
-            repo_id="Teedyyy-rm/Voice_Ngoc_Huyen",
+            repo_id=cfg["repo"],
             repo_type="dataset",
             local_dir=dataset_path,
             token=os.environ.get("HF_TOKEN"),
@@ -384,14 +424,15 @@ def main():
         eval_strategy="steps",
         eval_steps=max(1, steps_per_epoch // 2),  # eval CÙNG tần suất save (bắt buộc: save_steps
                                                   # phải là bội của eval_steps cho load_best_model_at_end)
-        load_best_model_at_end=True,
+        load_best_model_at_end=False,   # ⚠️ bài học Aug 2: eval_loss chọn NHẦM checkpoint overfit
+                                        # → chọn bản cuối bằng NGHE/phổ (adapter_step đã push lên HF)
         metric_for_best_model="eval_loss",
         fp16=True,
         bf16=False,
         dataloader_num_workers=4,
         remove_unused_columns=False,
         push_to_hub=True,
-        hub_model_id="Teedyyy-rm/LoRa_Ngoc_Huyen_2.0",
+        hub_model_id=hub_model_id,
         hub_strategy="checkpoint",
         hub_token=os.environ.get("HF_TOKEN"),
         report_to="tensorboard",
@@ -412,7 +453,7 @@ def main():
             DetailedLogCallback(),
             PushAdapterOnSave(
                 model=m,
-                hub_model_id="Teedyyy-rm/LoRa_Ngoc_Huyen_2.0",
+                hub_model_id=hub_model_id,
                 hub_token=os.environ.get("HF_TOKEN"),
                 output_dir=output_dir,
             ),
@@ -445,8 +486,8 @@ def main():
     with open(os.path.join(final_path, "training_config.json"), "w") as f:
         json.dump({
             "base_model": base_model_path,
-            "dataset": "Teedyyy-rm/Voice_Ngoc_Huyen",
-            "voice_name": "Ngọc Huyền 2.0",
+            "dataset": cfg["repo"],
+            "voice_name": f"Ngọc Huyền ({args.dataset})",
             "lora_rank": lora_config.r,
             "lora_alpha": lora_config.lora_alpha,
             "target_modules": list(lora_config.target_modules),
@@ -456,7 +497,7 @@ def main():
             "learning_rate": training_args.learning_rate,
             "val_ratio": VAL_RATIO,
             "eval_strategy": "steps",
-            "load_best_model_at_end": True,
+            "load_best_model_at_end": training_args.load_best_model_at_end,
         }, f, indent=2)
 
 
