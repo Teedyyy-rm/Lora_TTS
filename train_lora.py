@@ -429,7 +429,8 @@ def main():
     VAL_RATIO = cfg["val_ratio"]
     BATCH_SIZE = cfg["batch_size"]
     GRAD_ACCUM = cfg["grad_accum"]
-    WARMUP_STEPS = cfg["warmup_steps"]
+    WARMUP_STEPS = cfg.get("warmup_steps", 100)
+    WARMUP_RATIO = cfg.get("warmup_ratio", 0.0)  # nếu >0: warmup = ratio × total_steps (chống méo giọng)
     SAVE_PER_EPOCH = cfg["save_per_epoch"]
     PREPROCESS_CFG = cfg.get("preprocess", {})
     TRAINING_CFG = cfg.get("training", {})
@@ -555,8 +556,12 @@ def main():
     #   - save_steps = steps/epoch (tính động theo dataset thật)
     steps_per_epoch = max(1, len(train_processed) // (BATCH_SIZE * GRAD_ACCUM))
     total_steps = steps_per_epoch * NUM_EPOCHS
+    # warmup_ratio (chống méo giọng): warmup = ratio × total (vd 0.03 × 4430 = 133 steps)
+    if WARMUP_RATIO > 0:
+        WARMUP_STEPS = max(1, int(total_steps * WARMUP_RATIO))
     logger.info(f"Steps/epoch: {steps_per_epoch}, total: {total_steps} "
-                f"({NUM_EPOCHS} epochs)")
+                f"({NUM_EPOCHS} epochs)"
+                f"(warmup {WARMUP_STEPS}{f' = {WARMUP_RATIO*100:.0f}%' if WARMUP_RATIO > 0 else ' steps'})")
 
     training_args = TrainingArguments(
         output_dir=output_dir,
