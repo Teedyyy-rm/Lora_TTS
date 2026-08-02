@@ -1,92 +1,56 @@
-# Lora_TTS — Finetune LoRA OmniVoice (Giọng Ngọc Huyền)
+# 🎤🎧 Lora_TTS — Bộ đôi TTS + STT cho giọng Ngọc Huyền
 
-Finetune **LoRA** cho **OmniVoice-Vietnamese** (base `splendor1811/omnivoice-vietnamese`)
-để clone giọng đọc **Ngọc Huyền** — dùng cho pipeline TTS StoryCast.
-
-## 📋 Kiến trúc
+Repo gồm **2 cấu trúc độc lập** — cùng dataset, 2 adapter RIÊNG BIỆT (không dùng chung):
 
 ```
-OmniVoice (Qwen3Model 605M backbone)
-   └── LoRA trên m.llm (7 modules: q,k,v,o_proj + gate,up,down_proj)
-        └── ~40M trainable / 605M ≈ 6.6%
+Lora_TTS/
+├── tts/    → 🔊 OmniVoice LoRA — CHỮ → GIỌNG (đọc truyện bằng giọng Ngọc Huyền)
+└── stt/    → 👂 Whisper large-v3 LoRA — GIỌNG → CHỮ (transcribe truyện chính xác)
 ```
 
-## 🚀 Cách chạy (trên V100 / máy train)
+## 🔊 tts/ — OmniVoice LoRA (Text → Speech)
 
-```bash
-# 1. Clone repo
-git clone https://github.com/Teedyyy-rm/Lora_TTS.git
-cd Lora_TTS
-
-# 2. Cài dependencies
-pip install -r requirements.txt
-
-# 3. Login HF (để clone dataset + push LoRA)
-huggingface-cli login   # hoặc export HF_TOKEN=...
-
-# 4. Train — TỰ ĐỘNG:
-#    - Clone dataset Teedyyy-rm/Voice_Ngoc_Huyen nếu chưa có
-#    - Clone base model splendor1811/omnivoice-vietnamese (đặt trong ./base_model/)
-#    - Train + push adapter lên HF
-python3 train_lora.py
-```
-
-> **Lưu ý:** base model cần ở `./base_model/omnivoice-vietnamese`
-> (clone trước: `huggingface-cli download splendor1811/omnivoice-vietnamese --local-dir ./base_model/omnivoice-vietnamese`)
-
-## ⚙️ Cấu hình (train_lora.py)
-
-| Tham số | Giá trị | Ghi chú |
-|---|---|---|
-| **Dataset** | `Teedyyy-rm/Voice_Ngoc_Huyen` | Dataset mới: nhiều giờ audio, có tên riêng truyện, pre-process sạch |
-| **LoRA rank** | 128 | alpha = 256 (2×rank) — như bản V100 cũ chạy tốt |
-| **LoRA dropout** | 0.05 | |
-| **Target modules** | q,k,v,o + gate,up,down | 7 modules |
-| **Epochs** | 4 | 10 quá nhiều với dataset 14000+ → overfit |
-| **Batch** | 8 × 4 grad accum | effective 32 (V100 dư VRAM) |
-| **Validation** | 5% (VAL_RATIO=0.05) | eval mỗi epoch, `load_best_model_at_end` chống overfit |
-| **Learning rate** | 2e-5 | cosine scheduler, warmup 100 |
-| **Precision** | FP16 | V100 |
-| **Hub output** | `Teedyyy-rm/LoRa_Ngoc_Huyen_2.0` | **PRIVATE** — Ngọc Huyền 2.0, KHÔNG đè bản cũ |
-
-## 📂 Các file
-
-| File | Chức năng |
+| | |
 |---|---|
-| `train_lora.py` | Script train chính (HF Trainer API) |
-| `callbacks.py` | Log đẹp: Loss/LR/Epoch/VRAM/% hoàn thành (không phá logs gốc) |
-| `validate_lora.py` | Test generation sau train |
-| `requirements.txt` | Dependencies (torch ≥2.6, transformers ≥5.14, peft ≥0.14) |
-
-## 🎯 Kết quả mong đợi
-
-- Dataset mới giải quyết: **nuốt chữ tên riêng** (có tên truyện: Thẩm Hữu Vi, Mai Mồi...)
-- Data nhiều giờ hơn → giảm **overfit/nhiễu**
-- So sánh A/B với bản cũ `omnivoice-ngochuyen-lora` (rank 128, data TIN Vbee)
-
-## 🧪 Validate sau train
+| Model | `splendor1811/omnivoice-vietnamese` (Qwen3-0.6B) + LoRA r64 |
+| Chức năng | Đọc text → giọng Ngọc Huyền clone (90% giống bản gốc ✅) |
+| Config chuẩn | rank 64, LR 1e-5, audio_lr 5e-5, mask_beta, drop_cond 0.1 |
+| Train | `train_lora.py --dataset combined --config config.yaml` |
+| Test | `validate_lora.py` + `evaluate_voice.py` (3 trục: phổ/sim/WER) |
+| HF adapter | `Teedyyy-rm/Omnivoice_Lora_v2` |
 
 ```bash
-python3 validate_lora.py --lora-path ./omnivoice_ngochuyen_lora_v2/final_lora --text "Câu test..."
+cd tts
+bash setup_v100.sh            # cài môi trường
+python3 train_lora.py --dataset combined --config config.yaml
 ```
 
-## 🐛 Troubleshooting — CÁC LỖI ĐÃ GẶP & FIX (đừng debug lại!)
+> ⚠️ Đọc `../.hermes/skills/mlops/omnivoice-finetuning/references/quickstart-lora-reuse.md` (skill) cho toàn bộ pitfalls đã trả giá.
 
-| Lỗi | Nguyên nhân | Fix |
-|---|---|---|
-| `CUDA error: no kernel image is available` | torch ≥2.7 không hỗ trợ V100 (sm_70) | `pip install torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cu126` |
-| `ImportError: To support decoding audio data, please install 'torchcodec'` | datasets ≥4.x ép dùng torchcodec | `pip install datasets==3.5.0` (dùng soundfile — không cần torchcodec) |
-| `libnppicc.so.12: cannot open shared object file` | torchcodec cần NVIDIA NPP (container minimized thiếu) | Không cài torchcodec — dùng datasets 3.5.0 |
-| `FileNotFoundError: ... neither a Dataset directory nor DatasetDict` | Logic load dataset sai (local dir có dataset_info.json là HF parquet format) | `load_dataset(local_dir)` — chỉ `load_from_disk` khi có `dataset_dict.json` |
-| `Error opening terminal: xterm-kitty` | V100 minimized không có terminfo Kitty | `export TERM=xterm-256color` (đã thêm vào ~/.bashrc) |
-| `Error opening terminal: unknown` khi dùng `watch` qua SSH | watch cần tty | `ssh -t -p 40202 ... "watch ..."` hoặc dùng `nvidia-smi -l 1` |
+## 👂 stt/ — Whisper large-v3 LoRA (Speech → Text)
 
-## 🆚 V2 vs bản cũ
+| | |
+|---|---|
+| Model | `openai/whisper-large-v3` (1.55B) + LoRA r16 |
+| Chức năng | Nghe audio truyện → text chuẩn (WER <3% giọng Ngọc Huyền) |
+| Mục đích | Tự động hóa pipeline: audio truyện → text → TTS đọc lại |
+| Train | `train_whisper_lora.py --config config_stt.yaml` |
+| HF adapter | `Teedyyy-rm/whisper-ngochuyen-lora` (repo riêng) |
 
-| | Bản cũ (`omnivoice-ngochuyen-lora`) | **V2 (repo này)** |
-|---|---|---|
-| Dataset | `pnnbao-ump/ngochuyen_voice` (TIN Vbee, 7540 mẫu) | **`Teedyyy-rm/Voice_Ngoc_Huyen`** (mới, sạch, có tên riêng) |
-| LoRA rank | 128 (qlora_train_v100.py cũ) | 128 (config này) |
-| Epochs | ~15000 steps | 4 epochs (~3500 steps) + eval 5% |
-| Trainer | Custom loop | **HF Trainer** + eval/early-stop |
-| Output | `omnivoice-ngochuyen-lora` | `LoRa_Ngoc_Huyen_2.0` |
+```bash
+cd stt
+bash setup_stt.sh             # cài môi trường (dùng chung venv V100)
+python3 train_whisper_lora.py --config config_stt.yaml
+```
+
+## 🔄 Pipeline truyện tự động (khi cả 2 xong)
+
+```
+① Audio truyện (YouTube) ──→ ② STT transcribe text chuẩn ──→ ③ TTS đọc lại bằng giọng Ngọc Huyền
+```
+
+## ⚠️ Quan trọng
+
+- **2 adapter KHÔNG dùng chung** — khác model (Qwen3-0.6B vs Whisper-1.55B), khác kiến trúc, khác shape weights.
+- Dataset 3 repo (26,253 mẫu / 48h) dùng chung cho cả 2 — đã verify cùng giọng (sim ≥0.75).
+- Thêm field số mới vào yaml → PHẢI khai báo trong `_coerce_cfg` INT/FLOAT lists (PyYAML `5e-5` → str crash).

@@ -1,0 +1,23 @@
+# STT — Whisper large-v3 LoRA finetune cho giọng Ngọc Huyền
+# Mục đích: transcribe chính xác audio truyện giọng này (WER <3%)
+# ⚠️ KHÁC TTS — đây là ASR (giọng → chữ), adapter RIÊNG không dùng chung
+model: openai/whisper-large-v3
+repo:
+  - Teedyyy-rm/Voice_Ngoc_Huyen
+  - pnnbao-ump/ngochuyen_voice
+  - thangnzt/NgocHuyenViVoice
+dataset_path: ./dataset/whisper_ngochuyen
+output_dir: ./output_whisper_ngochuyen
+hub_model_id: Teedyyy-rm/whisper-ngochuyen-lora   # repo RIÊNG cho STT
+num_epochs: 5
+val_ratio: 0.05
+batch_size: 2          # V100 16GB — Whisper large-v3 (1.55B) batch nhỏ
+grad_accum: 8          # effective 16
+learning_rate: 1e-4    # LoRA ASR chuẩn (Whisper finetune phổ biến dùng 1e-4)
+warmup_ratio: 0.03
+lora_rank: 16          # LoRA cho ASR — rank thấp đủ (khác TTS rank 64)
+lora_alpha: 32
+max_length: 448        # 30s audio @ 16kHz
+logging_steps: 10
+seed: 42
+push_to_hub: false

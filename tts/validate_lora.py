@@ -13,7 +13,7 @@ import pickle
 import soundfile as sf
 import argparse
 
-sys.path.insert(0, "/home/obito/projects/StoryCast")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
 
 import omnivoice
 from omnivoice.models.omnivoice import OmniVoiceGenerationConfig
@@ -25,10 +25,10 @@ def main():
     parser.add_argument("--lora_path", type=str, required=True,
                         help="Path to LoRA adapter (e.g., ./final_lora or HF repo)")
     parser.add_argument("--base_model", type=str,
-                        default="/home/obito/projects/Models/OmniVoice-Vietnamese",
+                        default="./base_model/omnivoice-vietnamese",
                         help="Base OmniVoice-Vietnamese model path")
     parser.add_argument("--voice_prompt", type=str,
-                        default="/home/obito/projects/StoryCast/assets/voices/Ngoc_Huyen/vp1.pkl",
+                        default="./voice_prompt.pkl",
                         help="Voice clone prompt (.pkl)")
     parser.add_argument("--text", type=str,
                         default="Xin chào, tôi là Ngọc Huyền. Rất vui được gặp bạn!",
