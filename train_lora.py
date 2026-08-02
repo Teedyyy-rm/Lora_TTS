@@ -175,28 +175,52 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer):
             enc = audio_tokenizer.encode(audio_input)
             audio_tokens = enc.audio_codes[0]  # [8, time]
 
-        # Tokenize text
-        text_tokens = text_tokenizer.encode(text, add_special_tokens=False)
+        import random
+
+        # 1. Định dạng văn bản đúng chuẩn OmniVoice (kèm các tag đặc biệt)
+        # Giả định language='vi', instruct='None' (hoặc lấy từ dataset nếu có)
+        full_text = f"<|lang_start|>vi<|lang_end|><|instruct_start|>None<|instruct_end|><|text_start|>{text}<|text_end|>"
+        text_tokens = text_tokenizer.encode(full_text, add_special_tokens=False)
 
         num_text = len(text_tokens)
         num_audio = audio_tokens.shape[1]
         seq_len = num_text + num_audio
 
-        # Build input_ids: [8, seq_len]
-        # Layer 0: text tokens + audio codebook 0
-        # Layers 1-7: audio codebooks 1-7
-        # codebook_layer_offsets: [0, 1025, 2050, 3075, 4100, 5125, 6150, 7175]
-        input_ids = torch.zeros((8, seq_len), dtype=torch.long)
-        input_ids[0, :num_text] = torch.tensor(text_tokens, dtype=torch.long)
-        input_ids[:, num_text:] = audio_tokens  # [8, time]
+        # 2. Audio Masking Logic (Tính năng quan trọng nhất của Flow-Matching/Masked LLM)
+        # Giữ lại một phần ngẫu nhiên làm prompt (0% - 30%), che đi phần còn lại (0% - 100%)
+        prompt_ratio = random.uniform(0.0, 0.3)
+        mask_ratio = random.uniform(0.0, 1.0)
+        
+        prompt_length = int(num_audio * prompt_ratio)
+        audio_inputs = audio_tokens.clone()
+        audio_labels = audio_tokens.clone()
 
-        # audio_mask: 0=text, 1=audio
+        # Tạo mask ngẫu nhiên cho vùng maskable (sau phần prompt_length)
+        maskable_region = audio_inputs[:, prompt_length:]
+        token_mask = torch.rand(maskable_region.shape) < mask_ratio
+        
+        # Gán token bị che thành 1024 (audio_mask_id)
+        audio_inputs[:, prompt_length:][token_mask] = 1024
+        
+        # Labels: Chỉ tính Loss trên các token BỊ CHE, các vùng khác gán -100
+        audio_labels[:, prompt_length:][~token_mask] = -100
+        audio_labels[:, :prompt_length] = -100
+
+        # 3. Build input_ids: [8, seq_len]
+        input_ids = torch.zeros((8, seq_len), dtype=torch.long)
+        # Điền text vào tất cả 8 layer (mô hình sẽ chỉ đọc từ layer 0 cho text)
+        input_ids[:, :num_text] = torch.tensor(text_tokens, dtype=torch.long).unsqueeze(0).repeat(8, 1)
+        # Điền phần audio đã được che (mask)
+        input_ids[:, num_text:] = audio_inputs
+
+        # 4. audio_mask: 0=text, 1=audio (để model biết áp dụng embedding nào)
         audio_mask = torch.zeros(seq_len, dtype=torch.bool)
         audio_mask[num_text:] = True
 
-        # labels: -100 for text positions, audio tokens for audio positions
-        labels = input_ids.clone()
-        labels[:, :num_text] = -100  # ignore text positions (all layers)
+        # 5. labels: text không tính loss (-100), chỉ audio_labels tính loss
+        labels = torch.zeros((8, seq_len), dtype=torch.long)
+        labels[:, :num_text] = -100
+        labels[:, num_text:] = audio_labels
 
         processed.append({
             "input_ids": input_ids,
