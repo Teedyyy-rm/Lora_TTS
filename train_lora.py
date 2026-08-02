@@ -71,6 +71,22 @@ DATASET_CFG = {
         "warmup_steps": 200,
         "save_per_epoch": 1,    # save + push 1 lần/epoch (đúng 471/epoch cũ)
     },
+    # combined: GỘP 2 dataset CÙNG GIỌNG (verify sim 0.873 Aug 2) — ~41h data.
+    #   - new (14,937 mẫu truyện) + old (7,540 mẫu tin tức) = 22,477 mẫu
+    #   - data LỚN → epochs giảm (5-6 đủ), batch 8×4=32, LR 2e-5 (đã kiểm chứng)
+    #   - mask_beta + audio_lr: nghiệm thức chống robot/vang
+    "combined": {
+        "repo": ["Teedyyy-rm/Voice_Ngoc_Huyen", "pnnbao-ump/ngochuyen_voice"],
+        "dataset_path": "./dataset/ngochuyen_combined",
+        "output_dir": "./omnivoice_ngochuyen_lora_combined",
+        "hub_model_id": "Teedyyy-rm/Omnivoice_Lora_v2",
+        "num_epochs": 6,
+        "val_ratio": 0.05,
+        "batch_size": 8,
+        "grad_accum": 4,        # effective 32
+        "warmup_ratio": 0.03,   # 3% total steps
+        "save_per_epoch": 2,    # save + push 2 lần/epoch
+    },
 }
 
 
@@ -454,16 +470,32 @@ def main():
     hub_model_id = cfg["hub_model_id"]
 
     # ── Clone dataset từ HuggingFace (nếu chưa có) ──
-    if not os.path.isdir(dataset_path):
-        logger.info(f"Cloning dataset từ HuggingFace: {cfg['repo']} ...")
-        from huggingface_hub import snapshot_download
-        snapshot_download(
-            repo_id=cfg["repo"],
-            repo_type="dataset",
-            local_dir=dataset_path,
-            token=os.environ.get("HF_TOKEN"),
-        )
-        logger.info(f"✅ Dataset cloned → {dataset_path}")
+    # ⚠️ combined: repo có thể là LIST (gộp 2 dataset) → clone MỖI repo vào
+    #    subfolder riêng (<dataset_path>/<repo_name>) — tránh ghi đè lẫn nhau!
+    repos = cfg["repo"] if isinstance(cfg["repo"], list) else [cfg["repo"]]
+    need_clone = False
+    if len(repos) > 1:
+        # combined: kiểm tra từng subfolder
+        for repo in repos:
+            repo_name = repo.split("/")[-1]
+            if not os.path.isdir(os.path.join(dataset_path, repo_name)):
+                need_clone = True
+                break
+    else:
+        need_clone = not os.path.isdir(dataset_path)
+
+    if need_clone:
+        for repo in repos:
+            logger.info(f"Cloning dataset từ HuggingFace: {repo} ...")
+            from huggingface_hub import snapshot_download
+            dest = os.path.join(dataset_path, repo.split("/")[-1]) if len(repos) > 1 else dataset_path
+            snapshot_download(
+                repo_id=repo,
+                repo_type="dataset",
+                local_dir=dest,
+                token=os.environ.get("HF_TOKEN"),
+            )
+        logger.info(f"✅ Dataset cloned → {dataset_path} ({len(repos)} repo)")
 
     # ── Load OmniVoice model (FP32 — Trainer tự cast FP16) ──
     # QUAN TRỌNG: load FP32, KHÔNG cast trước. Trainer fp16=True sẽ tự:
@@ -515,13 +547,28 @@ def main():
     from datasets import load_dataset
     # Dataset local (HF parquet format: data/ + dataset_info.json) → load_dataset.
     # load_from_disk CHỈ dùng khi có dataset_dict.json (DatasetDict lưu disk cũ)
-    if os.path.isdir(dataset_path) and os.path.exists(os.path.join(dataset_path, "dataset_dict.json")):
-        dataset = load_from_disk(dataset_path)
+    # ⚠️ combined: load TỪNG repo (mỗi repo 1 subfolder) rồi concatenate
+    if len(repos) > 1:
+        datasets_list = []
+        for repo in repos:
+            repo_name = repo.split("/")[-1]
+            sub_path = os.path.join(dataset_path, repo_name)
+            ds = load_dataset(sub_path, token=os.environ.get("HF_TOKEN"))
+            split = "train" if "train" in ds else list(ds.keys())[0]
+            datasets_list.append(ds[split])
+            logger.info(f"  + {repo}: {len(ds[split])} samples")
+        from datasets import concatenate_datasets
+        train_data = concatenate_datasets(datasets_list)
+        logger.info(f"✅ COMBINED: {len(train_data)} samples ({len(repos)} datasets)")
     else:
-        dataset = load_dataset(dataset_path, token=os.environ.get("HF_TOKEN"))
-    split = "train" if "train" in dataset else list(dataset.keys())[0]
-    train_data = dataset[split]
-    logger.info(f"Raw dataset: {len(train_data)} samples")
+        if os.path.isdir(dataset_path) and os.path.exists(os.path.join(dataset_path, "dataset_dict.json")):
+            from datasets import load_from_disk
+            dataset = load_from_disk(dataset_path)
+        else:
+            dataset = load_dataset(dataset_path, token=os.environ.get("HF_TOKEN"))
+        split = "train" if "train" in dataset else list(dataset.keys())[0]
+        train_data = dataset[split]
+        logger.info(f"Raw dataset: {len(train_data)} samples")
 
     # Precompute audio tokens (GPU encode for speed, clear cache between loops)
     device = "cuda" if torch.cuda.is_available() else "cpu"
