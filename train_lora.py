@@ -291,7 +291,14 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer, pcfg=None):
         seq_len = num_text + num_audio
 
         # 2. Audio Masking Logic (Flow-Matching)
-        mask_ratio = random.uniform(*mask_range)
+        # ⚠️ NGHIỆM THỨC (Aug 2 — chống "robot/vấp từ"): inference thật = mask cao
+        #    (sinh toàn bộ audio từ text). Nếu mask_ratio_range=[0,1] uniform →
+        #    model ít được train ở chế độ khó/đúng inference. Dùng Beta(2,1)
+        #    (mean 0.67, thiên cao) khi config mask_beta=true.
+        if pcfg.get("mask_beta", False):
+            mask_ratio = float(np.random.beta(2, 1))
+        else:
+            mask_ratio = random.uniform(*mask_range)
         
         prompt_length = int(num_audio * prompt_ratio)
         audio_inputs = audio_tokens.clone()
@@ -600,14 +607,35 @@ def main():
     )
 
     # ── Trainer ──
-    trainer = Trainer(
-        model=m,
-        args=training_args,
-        train_dataset=train_processed,
-        eval_dataset=val_processed,
-        data_collator=DataCollatorForOmniVoice(),
-        callbacks=[
-            DetailedLogCallback(),
+    # ⚠️ TÁCH LR (Aug 2 — nghiệm thức chống "giọng chỉ giống ~50%"): LoRA (llm.*)
+    #    và audio_heads/embeddings (audio_*, full-rank) có tốc độ hội tụ KHÁC NHAU.
+    #    audio_lr = 5× LoRA (mặc định 1e-4 vs 2e-5) — audio_* cần LR cao hơn để
+    #    "áp" giọng đích vào, LoRA giữ LR thấp tránh overfit sớm.
+    audio_lr = TRAINING_CFG.get("audio_lr", 0.0)  # 0 = KHÔNG tách (dùng LR chung)
+    if audio_lr > 0:
+        llm_params = [p for n, p in m.named_parameters()
+                      if "llm" in n and p.requires_grad]
+        audio_params = [p for n, p in m.named_parameters()
+                        if "audio_" in n and "audio_tokenizer" not in n and p.requires_grad]
+        lr_main = TRAINING_CFG.get("learning_rate", 2e-5)
+        logger.info(f"🔀 TÁCH LR: LoRA(llm)={lr_main} | audio_*={audio_lr} "
+                    f"(llm {len(llm_params)} tensors, audio {len(audio_params)} tensors)")
+        optimizer = torch.optim.AdamW([
+            {"params": llm_params, "lr": lr_main},
+            {"params": audio_params, "lr": audio_lr},
+        ])
+        # Scheduler: Trainer tự tạo nếu truyền optimizer đơn — nhưng với custom
+        # optimizer + lr_scheduler_type, dùng optimizers=(opt, None) → Trainer
+        # tạo scheduler theo args (warmup + cosine trên LR chính)
+        trainer = Trainer(
+            model=m,
+            args=training_args,
+            train_dataset=train_processed,
+            eval_dataset=val_processed,
+            data_collator=DataCollatorForOmniVoice(),
+            optimizers=(optimizer, None),
+            callbacks=[
+                DetailedLogCallback(),
             PushAdapterOnSave(
                 model=m,
                 hub_model_id=hub_model_id,
@@ -616,6 +644,23 @@ def main():
             ),
         ],
     )
+    else:
+        trainer = Trainer(
+            model=m,
+            args=training_args,
+            train_dataset=train_processed,
+            eval_dataset=val_processed,
+            data_collator=DataCollatorForOmniVoice(),
+            callbacks=[
+                DetailedLogCallback(),
+                PushAdapterOnSave(
+                    model=m,
+                    hub_model_id=hub_model_id,
+                    hub_token=os.environ.get("HF_TOKEN"),
+                    output_dir=output_dir,
+                ),
+            ],
+        )
 
     # ── Train ──
     logger.info("Starting training...")
