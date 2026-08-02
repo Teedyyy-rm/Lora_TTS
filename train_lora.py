@@ -32,15 +32,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ── Chọn dataset: --dataset old|new (Aug 2) ──
-#   new = Teedyyy-rm/Voice_Ngoc_Huyen   (14,937 mẫu, ~20.78h) — 3 epochs
-#   old = pnnbao-ump/ngochuyen_voice    (7,540 mẫu,  ~20h)    — 6 epochs
-#         (data nửa → epochs gấp đôi; để so sánh A/B chất lượng)
+#   new = Teedyyy-rm/Voice_Ngoc_Huyen   (14,937 mẫu, ~20.78h)
+#   old = pnnbao-ump/ngochuyen_voice    (7,540 mẫu,  ~20h)
 # ⚠️ load_best_model_at_end=False (bài học Aug 2: eval_loss chọn NHẦM checkpoint
 #    overfit — chọn bản cuối bằng NGHE/phổ, PushAdapterOnSave đã push từng
 #    adapter_step lên HF để test tay).
 import argparse
 
 DATASET_CFG = {
+    # new: dataset mới, 3 epochs (bài học: epoch 4 overfit trên data lớn)
     "new": {
         "repo": "Teedyyy-rm/Voice_Ngoc_Huyen",
         "dataset_path": "./dataset/ngochuyen_voice",
@@ -48,14 +48,25 @@ DATASET_CFG = {
         "hub_model_id": "Teedyyy-rm/LoRa_Ngoc_Huyen_2.0",
         "num_epochs": 3,
         "val_ratio": 0.05,
+        "batch_size": 8,
+        "grad_accum": 4,        # effective 32
+        "warmup_steps": 100,
+        "save_per_epoch": 2,    # save + push 2 lần/epoch (test nhiều điểm)
     },
+    # old: dataset cũ, cấu hình THEO checkpoint cũ (Teedyyy-rm/omnivoice-ngochuyen-lora
+    # last-checkpoint: 471/4720 steps, epoch 1/10, batch 4×4=16, warmup 200, save 1/epoch)
+    # để A/B so sánh chất lượng đúng điều kiện "học kĩ, thời gian lâu" như lần trước.
     "old": {
         "repo": "pnnbao-ump/ngochuyen_voice",
         "dataset_path": "./dataset/ngochuyen_voice_old",
         "output_dir": "./omnivoice_ngochuyen_lora_old",
         "hub_model_id": "Teedyyy-rm/LoRa_Ngoc_Huyen_old",
-        "num_epochs": 6,
+        "num_epochs": 10,
         "val_ratio": 0.05,
+        "batch_size": 4,
+        "grad_accum": 4,        # effective 16 (đúng checkpoint cũ)
+        "warmup_steps": 200,
+        "save_per_epoch": 1,    # save + push 1 lần/epoch (đúng 471/epoch cũ)
     },
 }
 
@@ -63,7 +74,8 @@ DATASET_CFG = {
 def parse_args():
     ap = argparse.ArgumentParser(description="Finetune LoRA OmniVoice (Ngọc Huyền)")
     ap.add_argument("--dataset", choices=list(DATASET_CFG.keys()), default="new",
-                    help="new=Voice_Ngoc_Huyen 14.9k mẫu (3 epochs) | old=ngochuyen_voice 7.5k mẫu (6 epochs)")
+                    help="new=Voice_Ngoc_Huyen 14.9k mẫu (3 epochs, batch 8×4) | "
+                         "old=ngochuyen_voice 7.5k mẫu (10 epochs, batch 4×4 — theo checkpoint cũ)")
     return ap.parse_args()
 
 
@@ -75,8 +87,8 @@ def parse_args():
 #     trợ gradient_checkpointing — batch 16 không checkpointing = ~22GB OOM. Batch 8
 #     không checkpointing = 10.9GB/16GB — đã verify trên V100 cũ)
 #   - dropout 0.0 (Unsloth: LoRA dropout không hữu ích cho TTS, 0 = consistency)
-BATCH_SIZE = 8          # effective 32 (8×4)
-GRAD_ACCUM = 4
+# ⚠️ BATCH_SIZE/GRAD_ACCUM/WARMUP thực tế lấy từ DATASET_CFG trong main() — 2 dòng
+#    dưới chỉ là default cho module-level (không còn dùng trực tiếp).
 
 
 @dataclass
@@ -289,7 +301,13 @@ def main():
     cfg = DATASET_CFG[args.dataset]
     NUM_EPOCHS = cfg["num_epochs"]
     VAL_RATIO = cfg["val_ratio"]
-    logger.info(f"Dataset: {args.dataset} → {cfg['repo']} ({NUM_EPOCHS} epochs)")
+    BATCH_SIZE = cfg["batch_size"]
+    GRAD_ACCUM = cfg["grad_accum"]
+    WARMUP_STEPS = cfg["warmup_steps"]
+    SAVE_PER_EPOCH = cfg["save_per_epoch"]
+    logger.info(f"Dataset: {args.dataset} → {cfg['repo']} | {NUM_EPOCHS} epochs, "
+                f"batch {BATCH_SIZE}×{GRAD_ACCUM} (effective {BATCH_SIZE*GRAD_ACCUM}), "
+                f"warmup {WARMUP_STEPS}, save {SAVE_PER_EPOCH} lần/epoch")
 
     # ── Paths (điều chỉnh cho V100 Docker) ──
     base_model_path = "./base_model/omnivoice-vietnamese"
@@ -416,14 +434,13 @@ def main():
         gradient_accumulation_steps=GRAD_ACCUM,
         learning_rate=2e-5,
         lr_scheduler_type="cosine",
-        warmup_steps=100,
+        warmup_steps=WARMUP_STEPS,
         logging_steps=10,
         save_strategy="steps",
-        save_steps=max(1, steps_per_epoch // 2),  # save 2 lần/epoch → test được nhiều điểm
-        save_total_limit=6,
+        save_steps=max(1, steps_per_epoch // SAVE_PER_EPOCH),  # theo cfg (1-2 lần/epoch)
+        save_total_limit=10,
         eval_strategy="steps",
-        eval_steps=max(1, steps_per_epoch // 2),  # eval CÙNG tần suất save (bắt buộc: save_steps
-                                                  # phải là bội của eval_steps cho load_best_model_at_end)
+        eval_steps=max(1, steps_per_epoch // SAVE_PER_EPOCH),  # eval cùng tần suất save
         load_best_model_at_end=False,   # ⚠️ bài học Aug 2: eval_loss chọn NHẦM checkpoint overfit
                                         # → chọn bản cuối bằng NGHE/phổ (adapter_step đã push lên HF)
         metric_for_best_model="eval_loss",
