@@ -579,7 +579,11 @@ def main():
         bf16=False,
         dataloader_num_workers=4,
         remove_unused_columns=False,
-        push_to_hub=True,
+        push_to_hub=False,           # ⚠️ Aug 2: TẮT — hub_strategy="checkpoint" push FULL MODEL
+                                     # 3.5GB + optimizer 616MB + runs mỗi epoch → phình HF
+                                     # (storage từng 56.6GB). PushAdapterOnSave (callback riêng,
+                                     # dùng HfApi().upload_folder trực tiếp) tự push adapter nhẹ
+                                     # 390MB lên adapters/checkpoint-N — KHÔNG phụ thuộc push_to_hub.
         hub_model_id=hub_model_id,
         hub_strategy="checkpoint",
         hub_token=os.environ.get("HF_TOKEN"),
