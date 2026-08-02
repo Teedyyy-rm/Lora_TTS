@@ -35,6 +35,12 @@ def main():
                         help="Text to generate")
     parser.add_argument("--output", type=str, default="output/validation.wav",
                         help="Output WAV path")
+    parser.add_argument("--guidance", type=float, default=2.0,
+                        help="Guidance scale (A/B test): 1.0 cho model CŨ train thiếu "
+                             "drop_cond (không nội suy rác), 2.0 chuẩn cho model MỚI có "
+                             "CFG dropout 10%, 3.0+ nếu muốn text bám sát (rủi ro artificial)")
+    parser.add_argument("--steps", type=int, default=48,
+                        help="Diffusion steps (mặc định 48)")
     args = parser.parse_args()
 
     # ── Load base OmniVoice model ──
@@ -104,7 +110,7 @@ def main():
 
     # ── Generate ──
     gc = OmniVoiceGenerationConfig(
-        num_step=48, guidance_scale=2.0,
+        num_step=args.steps, guidance_scale=args.guidance,
         denoise=True, preprocess_prompt=True, postprocess_output=True,
     )
 
