@@ -104,6 +104,31 @@ def load_yaml_config(path="config.yaml"):
         return {}
 
 
+def _coerce_cfg(cfg):
+    """Ép kiểu an toàn cho config.yaml — PyYAML parse '2e-5' thành str (bug gặp Aug 2:
+    TypeError: '<=' not supported between instances of 'float' and 'str' trong AdamW).
+    Int fields → int, float fields → float, còn lại giữ nguyên (str/bool/list)."""
+    INT_FIELDS = {"num_epochs", "batch_size", "grad_accum", "warmup_steps",
+                  "save_per_epoch", "lora_rank", "lora_alpha", "logging_steps",
+                  "save_total_limit", "seed"}
+    FLOAT_FIELDS = {"val_ratio", "learning_rate", "lora_dropout", "rms_normalize",
+                    "drop_cond_ratio", "audio_mask_id"}
+    for k, v in list(cfg.items()):
+        if v is None:
+            continue
+        if k in INT_FIELDS:
+            try:
+                cfg[k] = int(v)
+            except (TypeError, ValueError):
+                pass
+        elif k in FLOAT_FIELDS:
+            try:
+                cfg[k] = float(v)
+            except (TypeError, ValueError):
+                pass
+    return cfg
+
+
 def resolve_config(args):
     """Kết hợp: default DATASET_CFG ← config.yaml ← CLI args."""
     ycfg = load_yaml_config(args.config)
@@ -126,6 +151,11 @@ def resolve_config(args):
     # 4. Preprocess config (ghi đè nếu có)
     ypp = ycfg.get("preprocess", {})
     cfg["preprocess"] = {k: v for k, v in ypp.items() if v is not None}
+
+    # 5. Ép kiểu số (fix PyYAML str '2e-5' → float)
+    cfg = _coerce_cfg(cfg)
+    cfg["training"] = _coerce_cfg(cfg.get("training", {}))
+    cfg["preprocess"] = _coerce_cfg(cfg.get("preprocess", {}))
 
     return dataset, cfg
 
