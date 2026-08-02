@@ -128,7 +128,7 @@ def _coerce_cfg(cfg):
                   "save_per_epoch", "lora_rank", "lora_alpha", "logging_steps",
                   "save_total_limit", "seed"}
     FLOAT_FIELDS = {"val_ratio", "learning_rate", "lora_dropout", "rms_normalize",
-                    "drop_cond_ratio", "audio_mask_id"}
+                    "drop_cond_ratio", "audio_mask_id", "audio_lr", "warmup_ratio"}
     for k, v in list(cfg.items()):
         if v is None:
             continue
