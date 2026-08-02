@@ -56,11 +56,13 @@ DATASET_CFG = {
     # old: dataset cũ, cấu hình THEO checkpoint cũ (Teedyyy-rm/omnivoice-ngochuyen-lora
     # last-checkpoint: 471/4720 steps, epoch 1/10, batch 4×4=16, warmup 200, save 1/epoch)
     # để A/B so sánh chất lượng đúng điều kiện "học kĩ, thời gian lâu" như lần trước.
+    # ⚠️ Aug 2: hub_model_id đổi sang LoRa_Ngoc_Huyen_2.0 (Teedyy yêu cầu) — sau khi
+    #    fix root cause masking, adapter old sẽ push vào repo 2.0 (đã dọn sạch chỉ giữ README)
     "old": {
         "repo": "pnnbao-ump/ngochuyen_voice",
         "dataset_path": "./dataset/ngochuyen_voice_old",
         "output_dir": "./omnivoice_ngochuyen_lora_old",
-        "hub_model_id": "Teedyyy-rm/LoRa_Ngoc_Huyen_old",
+        "hub_model_id": "Teedyyy-rm/LoRa_Ngoc_Huyen_2.0",
         "num_epochs": 10,
         "val_ratio": 0.05,
         "batch_size": 4,
