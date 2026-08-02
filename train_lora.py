@@ -76,7 +76,7 @@ DATASET_CFG = {
     #   - data LỚN → epochs giảm (5-6 đủ), batch 8×4=32, LR 2e-5 (đã kiểm chứng)
     #   - mask_beta + audio_lr: nghiệm thức chống robot/vang
     "combined": {
-        "repo": ["Teedyyy-rm/Voice_Ngoc_Huyen", "pnnbao-ump/ngochuyen_voice"],
+        "repo": ["Teedyyy-rm/Voice_Ngoc_Huyen", "pnnbao-ump/ngochuyen_voice", "thangnzt/NgocHuyenViVoice"],
         "dataset_path": "./dataset/ngochuyen_combined",
         "output_dir": "./omnivoice_ngochuyen_lora_combined",
         "hub_model_id": "Teedyyy-rm/Omnivoice_Lora_v2",
@@ -265,7 +265,8 @@ def preprocess_dataset(dataset, audio_tokenizer, text_tokenizer, pcfg=None):
         else:
             audio_array = audio_field
             sr = 24000
-        text = sample["transcription"]
+        # text: linh hoạt column — 'transcription' (chuẩn) hoặc 'text' (thangnzt)
+        text = sample.get("transcription") or sample.get("text", "")
 
         # Convert audio to tensor
         audio_t = torch.from_numpy(audio_array).float()
